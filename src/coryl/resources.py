@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import time
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ from importlib import import_module
 from importlib import resources as importlib_resources
 from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath
-from typing import IO, Callable, Literal, TypeVar, cast, overload
+from typing import IO, Any, Callable, Literal, TypeVar, cast, overload
 
 from ._io import _atomic_write_bytes, _atomic_write_text
 from ._locks import managed_lock
@@ -498,6 +499,7 @@ class Resource:
             encoding=self.encoding,
             role=role,
             readonly=self.readonly,
+            backend=self.backend,
             managed_root=self.path,
             root_name=self.root_name,
         )
@@ -1026,6 +1028,10 @@ class LayeredConfigResource(ConfigResource):
 class CacheResource(Resource):
     """Managed cache directory with file-oriented helpers."""
 
+    _INDEX_FILE_NAME = ".coryl-cache-index.json"
+    _INDEX_VERSION = 1
+    _ENTRY_MODES = frozenset({"structured", "text", "binary"})
+
     def entry(
         self,
         *parts: str | Path,
@@ -1043,8 +1049,97 @@ class CacheResource(Resource):
             raise TypeError("Cache directory creation returned the wrong resource type.")
         return resource
 
-    def remember(self, *parts: str | Path, content: object) -> Path:
-        return self.file(*parts, create=True).write(content)
+    def set(self, key: str | Path, value: object, ttl: float | None = None) -> Path:
+        resource = self._cache_file(key, create=True)
+        return self._store_cache_value(resource, value, ttl=ttl)
+
+    def get(self, key: str | Path, default: object = None) -> object:
+        resource = self._cache_file(key)
+        return self._get_cached_value(resource, default=default)
+
+    def has(self, key: str | Path) -> bool:
+        resource = self._cache_file(key)
+        if not resource.exists() or resource.path.is_dir():
+            self._cleanup_stale_index_entry(resource.path)
+            return False
+
+        metadata = self._cache_metadata(resource)
+        if self._is_cache_entry_expired(metadata):
+            self._cleanup_expired_entry(resource.path)
+            return False
+        return True
+
+    def remember(
+        self,
+        key_or_path: str | Path,
+        *parts: str | Path,
+        factory: Callable[[], object] | None = None,
+        content: object = MISSING,
+        ttl: float | None = None,
+    ) -> object:
+        resource = self._cache_file(key_or_path, *parts)
+        if parts and factory is None and ttl is None and content is not MISSING:
+            self._store_cache_value(resource, content, ttl=None)
+            return resource.path
+
+        cached_value = self._get_cached_value(resource, default=MISSING)
+        if cached_value is not MISSING:
+            return cached_value
+
+        value = self._resolve_remember_value(factory=factory, content=content)
+        self._store_cache_value(resource, value, ttl=ttl)
+        return value
+
+    def remember_json(
+        self,
+        path: str | Path,
+        factory: Callable[[], object],
+        ttl: float | None = None,
+    ) -> object:
+        resource = self._cache_file(path)
+        cached_value = self._get_cached_value(
+            resource,
+            default=MISSING,
+            reader=lambda candidate: candidate.read_json(),
+        )
+        if cached_value is not MISSING:
+            return cached_value
+
+        value = factory()
+        self._store_cache_value(
+            resource,
+            value,
+            ttl=ttl,
+            mode="structured",
+            writer=lambda candidate, item: candidate.write_json(item),
+        )
+        return value
+
+    def remember_text(
+        self,
+        path: str | Path,
+        factory: Callable[[], object],
+        ttl: float | None = None,
+    ) -> str:
+        resource = self._cache_file(path)
+        cached_value = self._get_cached_value(
+            resource,
+            default=MISSING,
+            reader=lambda candidate: candidate.read_text(),
+        )
+        if cached_value is not MISSING:
+            return cast(str, cached_value)
+
+        value = factory()
+        text_value = value if isinstance(value, str) else str(value)
+        self._store_cache_value(
+            resource,
+            text_value,
+            ttl=ttl,
+            mode="text",
+            writer=lambda candidate, item: candidate.write_text(str(item)),
+        )
+        return text_value
 
     def load(self, *parts: str | Path, default: object = MISSING) -> object:
         return self.file(*parts).content(default=default)
@@ -1052,16 +1147,39 @@ class CacheResource(Resource):
     def delete(self, *parts: str | Path, missing_ok: bool = True) -> None:
         self._assert_writable("deleted")
         target = self._resolve_child_path(*parts)
+        self._assert_cache_target(target)
 
         if not target.exists():
+            self._cleanup_stale_index_entry(target)
             if missing_ok:
                 return
             raise FileNotFoundError(target)
 
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
+        self._remove_target(target)
+
+    def expire(self) -> int:
+        self._assert_writable("expired")
+        index = self._load_cache_index()
+        removed = 0
+        dirty = False
+
+        for entry_key, metadata in list(index.items()):
+            target = self._cache_entry_path(entry_key)
+            if not target.exists() or target.is_dir():
+                del index[entry_key]
+                dirty = True
+                continue
+            if not self._is_cache_entry_expired(metadata):
+                continue
+
             target.unlink()
+            del index[entry_key]
+            removed += 1
+            dirty = True
+
+        if dirty:
+            self._save_cache_index(index)
+        return removed
 
     def clear(self) -> None:
         self._assert_writable("cleared")
@@ -1072,6 +1190,381 @@ class CacheResource(Resource):
                 shutil.rmtree(child)
             else:
                 child.unlink()
+
+    def _cache_file(self, *parts: str | Path, create: bool = False) -> Resource:
+        resource = self.file(*parts, create=create)
+        self._assert_cache_target(resource.path)
+        return resource
+
+    def _assert_cache_target(self, candidate: Path) -> None:
+        relative = candidate.relative_to(self.path)
+        if relative.parts and relative.parts[0] == self._INDEX_FILE_NAME:
+            raise CorylValidationError(
+                f"Cache key '{relative.as_posix()}' is reserved for Coryl metadata."
+            )
+
+    def _cache_entry_key(self, target: Path | Resource) -> str:
+        candidate = target.path if isinstance(target, Resource) else target
+        self._assert_cache_target(candidate)
+        return candidate.relative_to(self.path).as_posix()
+
+    def _cache_entry_path(self, entry_key: str) -> Path:
+        return self.path.joinpath(*PurePosixPath(entry_key).parts).resolve(strict=False)
+
+    def _index_resource(self, *, create: bool = False) -> Resource:
+        return self.file(self._INDEX_FILE_NAME, create=create)
+
+    def _cache_metadata(self, resource: Resource) -> dict[str, object] | None:
+        return self._load_cache_index().get(self._cache_entry_key(resource))
+
+    def _load_cache_index(self) -> dict[str, dict[str, object]]:
+        index_resource = self._index_resource()
+        if not index_resource.exists():
+            return {}
+
+        payload = index_resource.read_json()
+        if payload == {}:
+            return {}
+        if not isinstance(payload, Mapping):
+            raise CorylValidationError("Cache index must be a JSON object.")
+
+        version = payload.get("version", self._INDEX_VERSION)
+        if version != self._INDEX_VERSION:
+            raise CorylValidationError(
+                f"Cache index version {version!r} is not supported by this Coryl build."
+            )
+
+        entries = payload.get("entries", {})
+        if not isinstance(entries, Mapping):
+            raise CorylValidationError("Cache index 'entries' must be a JSON object.")
+
+        normalized: dict[str, dict[str, object]] = {}
+        for raw_key, raw_metadata in entries.items():
+            if not isinstance(raw_key, str) or not isinstance(raw_metadata, Mapping):
+                raise CorylValidationError("Cache index entries must map strings to objects.")
+
+            metadata: dict[str, object] = {}
+            mode = raw_metadata.get("mode")
+            if mode is not None:
+                if mode not in self._ENTRY_MODES:
+                    raise CorylValidationError(f"Cache index mode {mode!r} is invalid.")
+                metadata["mode"] = mode
+
+            expires_at = raw_metadata.get("expires_at")
+            if expires_at is None:
+                metadata["expires_at"] = None
+            else:
+                try:
+                    metadata["expires_at"] = float(expires_at)
+                except (TypeError, ValueError) as exc:
+                    raise CorylValidationError(
+                        f"Cache index expiry for '{raw_key}' must be a number or null."
+                    ) from exc
+
+            normalized[raw_key] = metadata
+
+        return normalized
+
+    def _save_cache_index(self, index: Mapping[str, Mapping[str, object]]) -> None:
+        if not index:
+            index_resource = self._index_resource()
+            if index_resource.exists():
+                index_resource.path.unlink()
+            return
+
+        payload = {
+            "version": self._INDEX_VERSION,
+            "entries": {key: dict(value) for key, value in sorted(index.items())},
+        }
+        self._index_resource(create=True).write_json(payload)
+
+    def _store_cache_value(
+        self,
+        resource: Resource,
+        value: object,
+        *,
+        ttl: float | None,
+        mode: str | None = None,
+        writer: Callable[[Resource, object], Path] | None = None,
+    ) -> Path:
+        self._assert_writable("written")
+
+        if writer is None:
+            entry_mode = self._write_cache_value(resource, value)
+        else:
+            writer(resource, value)
+            entry_mode = mode or self._detect_cache_mode(resource, value)
+
+        index = self._load_cache_index()
+        index[self._cache_entry_key(resource)] = {
+            "mode": entry_mode,
+            "expires_at": self._expires_at(ttl),
+        }
+        self._save_cache_index(index)
+        return resource.path
+
+    def _write_cache_value(self, resource: Resource, value: object) -> str:
+        if resource.format is not None:
+            resource.write_data(value)
+            return "structured"
+        if isinstance(value, bytes):
+            resource.write_bytes(value)
+            return "binary"
+
+        resource.write_text(str(value))
+        return "text"
+
+    def _detect_cache_mode(self, resource: Resource, value: object) -> str:
+        if resource.format is not None:
+            return "structured"
+        if isinstance(value, bytes):
+            return "binary"
+        return "text"
+
+    def _get_cached_value(
+        self,
+        resource: Resource,
+        *,
+        default: object = MISSING,
+        reader: Callable[[Resource], object] | None = None,
+    ) -> object:
+        if not resource.exists() or resource.path.is_dir():
+            self._cleanup_stale_index_entry(resource.path)
+            return default
+
+        metadata = self._cache_metadata(resource)
+        if self._is_cache_entry_expired(metadata):
+            self._cleanup_expired_entry(resource.path)
+            return default
+
+        try:
+            if reader is not None:
+                return reader(resource)
+            return self._read_cache_value(resource, metadata, default=default)
+        except Exception:
+            if default is not MISSING:
+                return default
+            raise
+
+    def _read_cache_value(
+        self,
+        resource: Resource,
+        metadata: Mapping[str, object] | None,
+        *,
+        default: object = MISSING,
+    ) -> object:
+        mode = metadata.get("mode") if isinstance(metadata, Mapping) else None
+        if mode == "binary":
+            try:
+                return resource.read_bytes()
+            except Exception:
+                if default is not MISSING:
+                    return default
+                raise
+        if mode == "text":
+            try:
+                return resource.read_text()
+            except Exception:
+                if default is not MISSING:
+                    return default
+                raise
+
+        return resource.content(default=default)
+
+    def _resolve_remember_value(
+        self,
+        *,
+        factory: Callable[[], object] | None,
+        content: object,
+    ) -> object:
+        if callable(factory):
+            return factory()
+        if content is not MISSING:
+            return content
+        raise CorylValidationError(
+            "Cache remember() requires a callable factory or an explicit content value."
+        )
+
+    def _normalize_ttl(self, ttl: float | None) -> float | None:
+        if ttl is None:
+            return None
+        if isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+            raise CorylValidationError("Cache TTL must be a number of seconds or None.")
+        return float(ttl)
+
+    def _expires_at(self, ttl: float | None) -> float | None:
+        normalized_ttl = self._normalize_ttl(ttl)
+        if normalized_ttl is None:
+            return None
+        return time.time() + normalized_ttl
+
+    def _is_cache_entry_expired(self, metadata: Mapping[str, object] | None) -> bool:
+        if not isinstance(metadata, Mapping):
+            return False
+
+        expires_at = metadata.get("expires_at")
+        if expires_at is None:
+            return False
+        return time.time() >= float(expires_at)
+
+    def _cleanup_expired_entry(self, target: Path) -> None:
+        if self.readonly:
+            return
+        self._remove_target(target)
+
+    def _cleanup_stale_index_entry(self, target: Path) -> None:
+        if self.readonly:
+            return
+
+        index = self._load_cache_index()
+        if self._remove_index_entries(target, index):
+            self._save_cache_index(index)
+
+    def _remove_target(self, target: Path) -> None:
+        index = self._load_cache_index()
+        dirty = self._remove_index_entries(target, index)
+
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+
+        if dirty:
+            self._save_cache_index(index)
+
+    def _remove_index_entries(
+        self,
+        target: Path,
+        index: dict[str, dict[str, object]],
+    ) -> bool:
+        relative = target.relative_to(self.path).as_posix()
+        prefix = f"{relative}/"
+        stale_keys = [
+            entry_key for entry_key in list(index) if entry_key == relative or entry_key.startswith(prefix)
+        ]
+        for entry_key in stale_keys:
+            del index[entry_key]
+        return bool(stale_keys)
+
+
+class DiskCacheResource(CacheResource):
+    """Cache resource backed by the optional ``diskcache`` package."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _load_diskcache_cache_class()
+        self._raw_cache: Any | None = None
+
+    @property
+    def raw(self) -> object:
+        if self._raw_cache is None:
+            cache_class = _load_diskcache_cache_class()
+            self._raw_cache = cache_class(str(self.path))
+        return self._raw_cache
+
+    def set(self, key: object, value: object, ttl: float | None = None) -> Path:
+        self._assert_writable("written")
+        normalized_ttl = self._normalize_ttl(ttl)
+        self.raw.set(self._normalize_diskcache_key(key), value, expire=normalized_ttl)
+        return self.path
+
+    def get(self, key: object, default: object = None) -> object:
+        return self.raw.get(self._normalize_diskcache_key(key), default=default)
+
+    def has(self, key: object) -> bool:
+        return self._normalize_diskcache_key(key) in self.raw
+
+    def remember(
+        self,
+        key_or_path: object,
+        *parts: str | Path,
+        factory: Callable[[], object] | None = None,
+        content: object = MISSING,
+        ttl: float | None = None,
+    ) -> object:
+        normalized_key = self._normalize_diskcache_key(key_or_path, *parts)
+        cached_value = self.get(normalized_key, default=MISSING)
+        if cached_value is not MISSING:
+            return cached_value
+
+        value = self._resolve_remember_value(factory=factory, content=content)
+        self.set(normalized_key, value, ttl=ttl)
+        return value
+
+    def remember_json(
+        self,
+        path: str | Path,
+        factory: Callable[[], object],
+        ttl: float | None = None,
+    ) -> object:
+        return self.remember(path, factory=factory, ttl=ttl)
+
+    def remember_text(
+        self,
+        path: str | Path,
+        factory: Callable[[], object],
+        ttl: float | None = None,
+    ) -> str:
+        cached_value = self.get(path, default=MISSING)
+        if cached_value is not MISSING:
+            return cached_value if isinstance(cached_value, str) else str(cached_value)
+
+        value = factory()
+        text_value = value if isinstance(value, str) else str(value)
+        self.set(path, text_value, ttl=ttl)
+        return text_value
+
+    def load(self, *parts: str | Path, default: object = MISSING) -> object:
+        if not parts:
+            raise TypeError("DiskCacheResource.load() requires at least one key or path part.")
+
+        key = self._normalize_diskcache_key(parts[0], *parts[1:])
+        if default is MISSING:
+            value = self.get(key, default=MISSING)
+            if value is MISSING:
+                raise KeyError(key)
+            return value
+        return self.get(key, default=default)
+
+    def delete(
+        self,
+        key_or_path: object,
+        *parts: str | Path,
+        missing_ok: bool = True,
+    ) -> None:
+        self._assert_writable("deleted")
+        deleted = self.raw.delete(self._normalize_diskcache_key(key_or_path, *parts))
+        if not deleted and not missing_ok:
+            raise KeyError(key_or_path)
+
+    def expire(self) -> int:
+        self._assert_writable("expired")
+        removed = self.raw.expire()
+        return 0 if removed is None else int(removed)
+
+    def clear(self) -> None:
+        self._assert_writable("cleared")
+        self.raw.clear()
+
+    def memoize(self, ttl: float | None = None) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        normalized_ttl = self._normalize_ttl(ttl)
+        return self.raw.memoize(expire=normalized_ttl)
+
+    def _normalize_diskcache_key(self, key: object, *parts: str | Path) -> object:
+        if parts:
+            if not isinstance(key, (str, Path)):
+                raise TypeError(
+                    "DiskCache path-style keys must start with a string or Path when parts are provided."
+                )
+            normalized_path = validate_managed_path_input(Path(key, *parts))
+            return normalized_path.as_posix()
+
+        if isinstance(key, Path):
+            return validate_managed_path_input(key).as_posix()
+        if isinstance(key, str):
+            return validate_managed_path_input(Path(key)).as_posix()
+        return key
 
 
 class AssetGroup(Resource):
@@ -1422,7 +1915,7 @@ def create_resource(
     if role == "config":
         resource_class = ConfigResource
     elif role == "cache":
-        resource_class = CacheResource
+        resource_class = DiskCacheResource if backend == "diskcache" else CacheResource
     elif role == "assets":
         resource_class = AssetGroup
     else:
@@ -1606,3 +2099,21 @@ def _load_pydantic_module() -> object:
         )
 
     return module
+
+
+def _load_diskcache_cache_class() -> type[Any]:
+    try:
+        module = import_module("diskcache")
+    except ModuleNotFoundError as error:
+        raise CorylOptionalDependencyError(
+            "Install coryl[diskcache] to use the diskcache backend."
+        ) from error
+
+    try:
+        cache_class = module.Cache
+    except AttributeError as error:  # pragma: no cover - defensive
+        raise CorylOptionalDependencyError(
+            "Install coryl[diskcache] to use the diskcache backend."
+        ) from error
+
+    return cast(type[Any], cache_class)

@@ -36,6 +36,12 @@ Optional file locking support:
 pip install coryl[lock]
 ```
 
+Optional DiskCache backend for heavier persistent caches:
+
+```bash
+pip install coryl[diskcache]
+```
+
 Optional platform-aware app roots:
 
 ```bash
@@ -89,11 +95,17 @@ settings.save(
     }
 )
 
-http_cache.remember("responses", "users.json", content={"count": 42})
+users = http_cache.remember_json(
+    "responses/users.json",
+    lambda: {"count": 42},
+    ttl=300,
+)
+state = http_cache.remember_text("tokens/state.txt", lambda: "ready", ttl=60)
 logo = ui_assets.file("images", "logo.svg", create=False)
 
 print(settings.load())
-print(http_cache.load("responses", "users.json"))
+print(users)
+print(state)
 print(logo.path)
 ```
 
@@ -325,30 +337,65 @@ Use `caches.add()` or `register_cache()` for cache folders.
 cache = app.caches.add("http", ".cache/http")
 ```
 
+Cache directories in Coryl are lightweight file caches for local artifacts, API responses, and generated runtime data. They are not intended to replace Redis or Memcached. By default, Coryl keeps this built-in cache file-oriented and simple.
+
 Cache resources provide:
 
 - `entry(...)`
 - `file(...)`
 - `directory(...)`
-- `remember(..., content=...)`
+- `set(key, value, ttl=None)`
+- `get(key, default=None)`
+- `has(key)`
+- `expire()`
+- `remember(key_or_path, factory=None, content=None, ttl=None)`
+- `remember_json(path, factory, ttl=None)`
+- `remember_text(path, factory, ttl=None)`
 - `load(...)`
 - `delete(...)`
 - `clear()`
+
+Structured files such as `.json` keep Coryl's normal automatic data handling, text values stay text, and `set(..., bytes_value)` round-trips bytes through `get(...)`.
 
 Example:
 
 ```python
 cache = app.caches.add("http", ".cache/http")
 
-cache.remember("users", "42.json", content={"id": 42, "name": "Ada"})
-cache.remember("tokens", "state.txt", content="ready")
+user_data = cache.remember_json(
+    "users/42.json",
+    lambda: {"id": 42, "name": "Ada"},
+    ttl=300,
+)
+state = cache.remember_text("tokens/state.txt", lambda: "ready", ttl=60)
+cache.set("responses/blob.bin", b"abc123", ttl=120)
 
-user_data = cache.load("users", "42.json")
-state = cache.load("tokens", "state.txt")
+cached_user = cache.get("users/42.json")
+cached_blob = cache.get("responses/blob.bin")
 
 print(user_data)
 print(state)
+print(cached_user)
+print(cached_blob)
 ```
+
+If you want the low-level file-oriented behavior Coryl already had, `load(...)` still reads a cache file directly and `set(...)` eagerly writes a value immediately. The older multi-part `remember("dir", "file.json", content=...)` form is still accepted for compatibility.
+
+If you need more robust persistent cache behavior, heavier cache workloads, or multi-process access, install the optional DiskCache backend and let Coryl manage the directory while DiskCache handles storage:
+
+```bash
+pip install coryl[diskcache]
+```
+
+```python
+cache = app.caches.diskcache("api", ".cache/api")
+# or: app.caches.add("api", ".cache/api", backend="diskcache")
+
+cache.set("users:42", {"id": 42, "name": "Ada"}, ttl=300)
+user = cache.get("users:42")
+```
+
+The built-in file cache is best when you want inspectable cache files and predictable path-based behavior. The DiskCache backend is a better fit for multi-process use or when you want a more capable persistent key-value cache without changing how Coryl manages resource roots.
 
 ### Asset Directories
 
@@ -740,10 +787,32 @@ Additional helpers:
 - `entry(...)`
 - `file(...)`
 - `directory(...)`
-- `remember(..., content=...)`
+- `set(key, value, ttl=None)`
+- `get(key, default=None)`
+- `has(key)`
+- `expire()`
+- `remember(key_or_path, factory=None, content=None, ttl=None)`
+- `remember_json(path, factory, ttl=None)`
+- `remember_text(path, factory, ttl=None)`
 - `load(...)`
 - `delete(...)`
 - `clear()`
+
+### DiskCacheResource
+
+Additional helpers:
+
+- `set(key, value, ttl=None)`
+- `get(key, default=None)`
+- `has(key)`
+- `delete(key)`
+- `clear()`
+- `expire()`
+- `remember(key_or_path, factory=None, content=None, ttl=None)`
+- `remember_json(path, factory, ttl=None)`
+- `remember_text(path, factory, ttl=None)`
+- `memoize(ttl=None)`
+- `raw`
 
 ### AssetGroup
 
@@ -792,8 +861,11 @@ from coryl import Coryl
 app = Coryl(root=".")
 cache = app.caches.add("api", ".cache/api")
 
-cache.remember("users", "42.json", content={"id": 42, "name": "Ada"})
-user = cache.load("users", "42.json")
+user = cache.remember_json(
+    "users/42.json",
+    lambda: {"id": 42, "name": "Ada"},
+    ttl=300,
+)
 print(user["name"])
 ```
 
@@ -828,7 +900,7 @@ app = Coryl(
 )
 
 app.configs.get("settings").save({"language": "en"})
-app.caches.get("cache").remember("session.json", content={"token": "abc"})
+app.caches.get("cache").set("session.json", {"token": "abc"}, ttl=300)
 print(app.assets.get("assets").files("**/*"))
 ```
 

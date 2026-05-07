@@ -22,6 +22,7 @@ from .resources import (
     AssetGroup,
     CacheResource,
     ConfigResource,
+    DiskCacheResource,
     LayeredConfigResource,
     PackageAssetGroup,
     Resource,
@@ -152,6 +153,7 @@ class CacheNamespace(_NamespaceBase[CacheResource]):
         *,
         create: bool | None = None,
         readonly: bool = False,
+        backend: str | None = None,
         replace: bool = False,
     ) -> CacheResource:
         return self._manager.register_cache(
@@ -159,8 +161,30 @@ class CacheNamespace(_NamespaceBase[CacheResource]):
             relative_path,
             create=create,
             readonly=readonly,
+            backend=backend,
             replace=replace,
         )
+
+    def diskcache(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        readonly: bool = False,
+        replace: bool = False,
+    ) -> DiskCacheResource:
+        resource = self._manager.register_cache(
+            name,
+            relative_path,
+            create=create,
+            readonly=readonly,
+            backend="diskcache",
+            replace=replace,
+        )
+        if not isinstance(resource, DiskCacheResource):  # pragma: no cover - defensive
+            raise TypeError("DiskCache cache registration returned the wrong resource type.")
+        return resource
 
     def get(self, name: str) -> CacheResource:
         return self._manager.cache_resource(name)
@@ -702,6 +726,7 @@ class ResourceManager:
         *,
         create: bool | None = None,
         readonly: bool = False,
+        backend: str | None = None,
         replace: bool = False,
     ) -> CacheResource:
         self.register(
@@ -710,6 +735,7 @@ class ResourceManager:
                 relative_path,
                 create=self._default_create_value(create, readonly=readonly),
                 readonly=readonly,
+                backend=backend,
             ),
             replace=replace,
         )

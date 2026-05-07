@@ -9,7 +9,7 @@ import sys
 import tempfile
 import types
 import unittest
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -21,6 +21,7 @@ from coryl import (
     CacheResource,
     ConfigResource,
     Coryl,
+    DiskCacheResource,
     CorylInvalidResourceKindError,
     CorylLockTimeoutError,
     CorylOptionalDependencyError,
@@ -989,10 +990,12 @@ role = "assets"
             encoding="utf-8",
         )
 
-        manager = Coryl(self.root, manifest_path=manifest_path)
+        fake_diskcache, _ = self._make_fake_diskcache_module()
+        with mock.patch("coryl.resources.import_module", return_value=fake_diskcache):
+            manager = Coryl(self.root, manifest_path=manifest_path)
 
         self.assertIsInstance(manager.configs.get("settings"), ConfigResource)
-        self.assertIsInstance(manager.caches.get("http_cache"), CacheResource)
+        self.assertIsInstance(manager.caches.get("http_cache"), DiskCacheResource)
         self.assertIsInstance(manager.assets.get("assets"), AssetGroup)
         self.assertEqual(manager.manifest["version"], MANIFEST_VERSION)
         self.assertTrue(manager.resource("settings").readonly)
@@ -1192,7 +1195,9 @@ resources:
             encoding="utf-8",
         )
 
-        app = Coryl(self.root, manifest_path="app.yaml")
+        fake_diskcache, _ = self._make_fake_diskcache_module()
+        with mock.patch("coryl.resources.import_module", return_value=fake_diskcache):
+            app = Coryl(self.root, manifest_path="app.yaml")
         audit = app.audit_paths()
 
         self.assertEqual(audit["root"], str(self.root.resolve()))
@@ -1232,6 +1237,231 @@ resources:
 
         cache.clear()
         self.assertEqual(list(cache.iterdir()), [])
+
+    def test_cache_set_and_get_json_data(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        cache.set("users/42.json", {"id": 42, "name": "Ada"})
+
+        self.assertEqual(cache.get("users/42.json")["name"], "Ada")
+
+    def test_cache_set_and_get_text(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        cache.set("tokens/state.txt", "ready")
+
+        self.assertEqual(cache.get("tokens/state.txt"), "ready")
+
+    def test_cache_set_and_get_binary(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        payload = b"\x00\xffcache-bytes"
+        cache.set("payload.bin", payload)
+
+        self.assertEqual(cache.get("payload.bin"), payload)
+
+    def test_cache_legacy_remember_content_remains_compatible(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        cache.remember("users", "42.json", content={"id": 42, "name": "Ada"})
+        cache.remember("users", "42.json", content={"id": 42, "name": "Grace"})
+
+        self.assertEqual(cache.load("users", "42.json")["name"], "Grace")
+
+    def test_cache_ttl_valid(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        with mock.patch("coryl.resources.time.time", return_value=1_000.0):
+            cache.set("tokens/state.txt", "fresh", ttl=60)
+
+        with mock.patch("coryl.resources.time.time", return_value=1_059.0):
+            self.assertTrue(cache.has("tokens/state.txt"))
+            self.assertEqual(cache.get("tokens/state.txt"), "fresh")
+
+    def test_cache_ttl_expired(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        with mock.patch("coryl.resources.time.time", return_value=1_000.0):
+            cache.set("tokens/state.txt", "stale", ttl=10)
+
+        with mock.patch("coryl.resources.time.time", return_value=1_011.0):
+            self.assertFalse(cache.has("tokens/state.txt"))
+            self.assertEqual(cache.get("tokens/state.txt", default="missing"), "missing")
+
+        self.assertFalse(cache.file("tokens", "state.txt").exists())
+
+    def test_cache_remember_uses_cached_value(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        cache.set("users/42.json", {"id": 42, "name": "Ada"})
+        cached = cache.remember("users/42.json", content={"id": 99, "name": "Grace"})
+
+        self.assertEqual(cached["name"], "Ada")
+        self.assertEqual(cache.get("users/42.json")["name"], "Ada")
+
+    def test_cache_remember_json_helper(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+        factory = mock.Mock(return_value={"id": 42, "name": "Ada"})
+
+        first = cache.remember_json("users/42.json", factory, ttl=60)
+        second = cache.remember_json("users/42.json", factory, ttl=60)
+
+        self.assertEqual(first["name"], "Ada")
+        self.assertEqual(second["name"], "Ada")
+        self.assertEqual(factory.call_count, 1)
+
+    def test_cache_remember_calls_factory_only_when_needed(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+        factory = mock.Mock(side_effect=["ready", "updated"])
+
+        first = cache.remember_text("tokens/state.txt", factory, ttl=60)
+        second = cache.remember_text("tokens/state.txt", factory, ttl=60)
+
+        self.assertEqual(first, "ready")
+        self.assertEqual(second, "ready")
+        self.assertEqual(factory.call_count, 1)
+
+    def test_cache_expire_removes_expired_entries(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        with mock.patch("coryl.resources.time.time", return_value=1_000.0):
+            cache.set("tokens/fresh.txt", "fresh", ttl=60)
+            cache.set("tokens/stale.txt", "stale", ttl=5)
+
+        with mock.patch("coryl.resources.time.time", return_value=1_010.0):
+            removed = cache.expire()
+
+        self.assertEqual(removed, 1)
+        with mock.patch("coryl.resources.time.time", return_value=1_010.0):
+            self.assertTrue(cache.has("tokens/fresh.txt"))
+            self.assertFalse(cache.has("tokens/stale.txt"))
+
+    def test_cache_rejects_unsafe_keys(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        with self.assertRaises(CorylUnsafePathError):
+            cache.set("../secrets.txt", "blocked")
+
+    def test_cache_clear_removes_cache_contents(self) -> None:
+        manager = Coryl(self.root)
+        cache = manager.caches.add("http_cache", ".cache/http")
+
+        cache.set("users/42.json", {"id": 42})
+        cache.set("payload.bin", b"abc", ttl=30)
+
+        cache.clear()
+
+        self.assertEqual(list(cache.iterdir()), [])
+
+    def test_cache_namespace_can_register_diskcache_backend(self) -> None:
+        fake_diskcache, _ = self._make_fake_diskcache_module()
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_diskcache):
+            manager = Coryl(self.root)
+            cache = manager.caches.diskcache("api", ".cache/api")
+
+        self.assertIsInstance(cache, DiskCacheResource)
+        self.assertEqual(cache.backend, "diskcache")
+        self.assertEqual(cache.path, (self.root / ".cache" / "api").resolve())
+
+    def test_cache_add_can_select_diskcache_backend(self) -> None:
+        fake_diskcache, _ = self._make_fake_diskcache_module()
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_diskcache):
+            manager = Coryl(self.root)
+            cache = manager.caches.add("api", ".cache/api", backend="diskcache")
+
+        self.assertIsInstance(cache, DiskCacheResource)
+        self.assertEqual(cache.backend, "diskcache")
+
+    def test_diskcache_backend_set_get(self) -> None:
+        fake_diskcache, _ = self._make_fake_diskcache_module()
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_diskcache):
+            manager = Coryl(self.root)
+            cache = manager.caches.diskcache("api", ".cache/api")
+            cache.set("users/42", {"id": 42, "name": "Ada"})
+
+            self.assertTrue(cache.has("users/42"))
+            self.assertEqual(cache.get("users/42")["name"], "Ada")
+
+    def test_diskcache_backend_ttl_expiration(self) -> None:
+        fake_diskcache, clock = self._make_fake_diskcache_module()
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_diskcache):
+            manager = Coryl(self.root)
+            cache = manager.caches.diskcache("api", ".cache/api")
+            cache.set("tokens/state", "ready", ttl=10)
+
+            clock["now"] = 1_011.0
+
+            self.assertFalse(cache.has("tokens/state"))
+            self.assertEqual(cache.get("tokens/state", default="missing"), "missing")
+
+    def test_diskcache_backend_clear(self) -> None:
+        fake_diskcache, _ = self._make_fake_diskcache_module()
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_diskcache):
+            manager = Coryl(self.root)
+            cache = manager.caches.diskcache("api", ".cache/api")
+            cache.set("users/42", {"id": 42})
+            cache.set("users/43", {"id": 43})
+
+            cache.clear()
+
+            self.assertFalse(cache.has("users/42"))
+            self.assertFalse(cache.has("users/43"))
+
+    def test_diskcache_backend_missing_dependency_error(self) -> None:
+        manager = Coryl(self.root)
+
+        with mock.patch(
+            "coryl.resources.import_module",
+            side_effect=ModuleNotFoundError("No module named 'diskcache'"),
+        ):
+            with self.assertRaises(CorylOptionalDependencyError) as caught:
+                manager.caches.diskcache("api", ".cache/api")
+
+        self.assertEqual(
+            str(caught.exception),
+            "Install coryl[diskcache] to use the diskcache backend.",
+        )
+
+    def test_diskcache_backend_registration_keeps_path_inside_root(self) -> None:
+        manager = Coryl(self.root)
+
+        with self.assertRaises(CorylUnsafePathError):
+            manager.caches.diskcache("api", "../outside")
+
+    def test_diskcache_backend_memoize(self) -> None:
+        fake_diskcache, _ = self._make_fake_diskcache_module()
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_diskcache):
+            manager = Coryl(self.root)
+            cache = manager.caches.diskcache("api", ".cache/api")
+            factory = mock.Mock(return_value={"count": 1})
+
+            @cache.memoize(ttl=60)
+            def build_payload(user_id: int) -> dict[str, object]:
+                return {"user_id": user_id, **factory()}
+
+            first = build_payload(42)
+            second = build_payload(42)
+
+        self.assertEqual(first["user_id"], 42)
+        self.assertEqual(second["count"], 1)
+        self.assertEqual(factory.call_count, 1)
 
     def test_readonly_cache_cannot_clear_or_delete(self) -> None:
         cache_file = self.root / ".cache" / "http" / "users" / "42.json"
@@ -1557,6 +1787,89 @@ resources:
             ValidationError=FakeValidationError,
             SettingsModel=SettingsModel,
         )
+
+    def _make_fake_diskcache_module(
+        self,
+    ) -> tuple[types.SimpleNamespace, dict[str, float]]:
+        clock = {"now": 1_000.0}
+        missing = object()
+
+        class FakeCache:
+            def __init__(self, directory: str) -> None:
+                self.directory = Path(directory)
+                self.directory.mkdir(parents=True, exist_ok=True)
+                self._entries: dict[object, tuple[object, float | None]] = {}
+
+            def set(self, key: object, value: object, expire: float | None = None) -> bool:
+                expires_at = None if expire is None else clock["now"] + float(expire)
+                self._entries[key] = (value, expires_at)
+                return True
+
+            def get(self, key: object, default: object = None) -> object:
+                self._purge_key(key)
+                entry = self._entries.get(key)
+                return default if entry is None else entry[0]
+
+            def delete(self, key: object) -> bool:
+                self._purge_key(key)
+                return self._entries.pop(key, None) is not None
+
+            def clear(self) -> int:
+                removed = len(self._entries)
+                self._entries.clear()
+                return removed
+
+            def expire(self) -> int:
+                removed = 0
+                for key in list(self._entries):
+                    removed += int(self._purge_key(key))
+                return removed
+
+            def memoize(
+                self,
+                *,
+                expire: float | None = None,
+            ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+                def decorator(function: Callable[..., object]) -> Callable[..., object]:
+                    def wrapper(*args: object, **kwargs: object) -> object:
+                        key = (
+                            function.__module__,
+                            function.__qualname__,
+                            args,
+                            tuple(sorted(kwargs.items())),
+                        )
+                        cached = self.get(key, default=missing)
+                        if cached is not missing:
+                            return cached
+
+                        value = function(*args, **kwargs)
+                        self.set(key, value, expire=expire)
+                        return value
+
+                    return wrapper
+
+                return decorator
+
+            def close(self) -> None:
+                return None
+
+            def __contains__(self, key: object) -> bool:
+                self._purge_key(key)
+                return key in self._entries
+
+            def _purge_key(self, key: object) -> bool:
+                entry = self._entries.get(key)
+                if entry is None:
+                    return False
+
+                _, expires_at = entry
+                if expires_at is None or expires_at > clock["now"]:
+                    return False
+
+                del self._entries[key]
+                return True
+
+        return types.SimpleNamespace(Cache=FakeCache), clock
 
 
 if __name__ == "__main__":
