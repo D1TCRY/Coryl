@@ -1,22 +1,126 @@
 # Coryl
 
-Coryl is a small Python library for managing application resources from a single root folder.
+Coryl is a Python library for managing application resources from a single root directory.
 
-It helps developers work with:
+It is designed for projects that need to work with:
 
 - configuration files
+- cache folders
+- static assets
 - runtime data files
-- asset folders
-- images, documents, and other bundled resources
+- documents, images, and bundled resources
 
-## Goals
+Coryl gives you one place to declare these resources, keeps them inside a safe root folder, and provides high-level helpers for JSON, TOML, YAML, text, and binary files.
 
-- keep every managed path inside a safe project root
-- create missing files and folders when desired
-- provide a clean API for text, JSON, and binary data
-- stay compatible with a legacy `paths.files` / `paths.directories` manifest layout
+## Features
+
+- Safe path resolution relative to one application root
+- Automatic creation of missing files and directories when desired
+- Built-in support for `.json`, `.toml`, `.yaml`, and `.yml`
+- Specialized APIs for `configs`, `caches`, and `assets`
+- Generic file and directory management when you do not need special behavior
+- Manifest loading from JSON, TOML, or YAML
+- Compatibility helpers for older `FileManager`-style code
+
+## Installation
+
+```bash
+pip install coryl
+```
+
+Python 3.10+ is supported.
+
+## Core Idea
+
+You create a `Coryl` manager bound to one root folder. Every managed resource is declared relative to that root.
+
+```python
+from coryl import Coryl
+
+app = Coryl(root=".")
+```
+
+From there you can register:
+
+- generic files
+- generic directories
+- config files
+- cache directories
+- asset directories
 
 ## Quick Start
+
+```python
+from coryl import Coryl
+
+app = Coryl(root=".")
+
+settings = app.configs.add("settings", "config/settings.toml")
+http_cache = app.caches.add("http", ".cache/http")
+ui_assets = app.assets.add("ui", "assets/ui")
+
+settings.save(
+    {
+        "app_name": "Coryl Demo",
+        "debug": True,
+        "database": {"host": "localhost", "port": 5432},
+    }
+)
+
+http_cache.remember("responses", "users.json", content={"count": 42})
+logo = ui_assets.file("images", "logo.svg", create=False)
+
+print(settings.load())
+print(http_cache.load("responses", "users.json"))
+print(logo.path)
+```
+
+## Concepts
+
+### Root Folder
+
+Every resource is resolved relative to a single root folder:
+
+```python
+app = Coryl(root="/path/to/project")
+```
+
+Coryl refuses to register or create managed resources outside that root.
+
+### Resource Types
+
+Coryl works with four main categories:
+
+- `Resource`: generic file or directory
+- `ConfigResource`: structured config file
+- `CacheResource`: cache directory with file-oriented helpers
+- `AssetGroup`: asset directory with lookup helpers
+
+### Structured Formats
+
+Structured files are detected automatically from their extension:
+
+- `.json`
+- `.toml`
+- `.yaml`
+- `.yml`
+
+For these files, Coryl will automatically read and write structured Python data.
+
+## Registering Resources
+
+### Generic Files and Directories
+
+```python
+app.register_file("notes", "data/notes.txt")
+app.register_directory("exports", "build/exports")
+
+app.write_content("notes", "Hello from Coryl")
+print(app.content("notes"))
+print(app.path("exports"))
+```
+
+You can also register them declaratively with `ResourceSpec`:
 
 ```python
 from coryl import Coryl, ResourceSpec
@@ -24,26 +128,175 @@ from coryl import Coryl, ResourceSpec
 app = Coryl(
     root=".",
     resources={
-        "config": ResourceSpec.file("config/settings.json"),
-        "assets": ResourceSpec.directory("assets"),
-        "docs": ResourceSpec.directory("docs", create=False),
+        "notes": ResourceSpec.file("data/notes.txt"),
+        "exports": ResourceSpec.directory("build/exports"),
     },
 )
-
-app.write_content("config", {"theme": "light", "language": "it"})
-settings = app.content("config")
-
-logo = app.directory("assets").joinpath("images", "logo.png", create=False)
-print(app.path("config"))
-print(settings)
-print(logo.path)
 ```
+
+### Config Files
+
+Use `configs.add()` or `register_config()` when the file is a real application configuration file.
+
+```python
+settings = app.configs.add("settings", "config/settings.yaml")
+```
+
+Supported config formats:
+
+- JSON
+- TOML
+- YAML
+
+Config resources provide:
+
+- `load()`
+- `save(data)`
+- `update(...)`
+
+Example:
+
+```python
+settings = app.configs.add("settings", "config/settings.yaml")
+
+settings.save({"theme": "light", "language": "en"})
+settings.update(language="it", timezone="Europe/Rome")
+
+print(settings.load())
+```
+
+### Cache Directories
+
+Use `caches.add()` or `register_cache()` for cache folders.
+
+```python
+cache = app.caches.add("http", ".cache/http")
+```
+
+Cache resources provide:
+
+- `entry(...)`
+- `file(...)`
+- `directory(...)`
+- `remember(..., content=...)`
+- `load(...)`
+- `delete(...)`
+- `clear()`
+
+Example:
+
+```python
+cache = app.caches.add("http", ".cache/http")
+
+cache.remember("users", "42.json", content={"id": 42, "name": "Ada"})
+cache.remember("tokens", "state.txt", content="ready")
+
+user_data = cache.load("users", "42.json")
+state = cache.load("tokens", "state.txt")
+
+print(user_data)
+print(state)
+```
+
+### Asset Directories
+
+Use `assets.add()` or `register_assets()` for static or bundled application assets.
+
+```python
+assets = app.assets.add("ui", "assets")
+```
+
+Asset resources provide:
+
+- `file(...)`
+- `directory(...)`
+- `require(...)`
+- `files(pattern="**/*")`
+- `glob(pattern)`
+
+Example:
+
+```python
+assets = app.assets.add("ui", "assets")
+
+logo = assets.require("images", "logo.svg")
+icons = assets.directory("icons")
+all_svgs = assets.files("**/*.svg")
+
+print(logo.path)
+print([path.name for path in all_svgs])
+```
+
+## Reading and Writing Files
+
+### Generic Automatic Access
+
+For generic file resources, `content()` and `write_content()` work automatically:
+
+```python
+app.register_file("data", "storage/data.json")
+
+app.write_content("data", {"name": "Coryl", "version": 1})
+print(app.content("data"))
+```
+
+If the file extension is structured, Coryl reads and writes structured data automatically. Otherwise it falls back to plain text, unless you write bytes explicitly.
+
+### Explicit File APIs
+
+Every file resource also exposes explicit methods:
+
+```python
+resource = app.register_file("report", "reports/daily.txt")
+
+resource.write_text("Daily report")
+print(resource.read_text())
+```
+
+Structured resources expose:
+
+```python
+settings = app.configs.add("settings", "config/settings.toml")
+
+settings.write_toml({"debug": True, "host": "localhost"})
+print(settings.read_toml())
+```
+
+And YAML:
+
+```python
+settings = app.configs.add("settings", "config/settings.yaml")
+
+settings.write_yaml({"theme": "dark"})
+print(settings.read_yaml())
+```
+
+## Working with Child Paths
+
+Directory resources can generate safe child resources:
+
+```python
+assets = app.assets.add("ui", "assets")
+
+logo = assets.file("images", "logo.svg")
+theme_dir = assets.directory("themes")
+```
+
+Coryl checks that generated child paths stay inside the parent directory.
 
 ## Manifest Support
 
-Coryl supports both a new `resources` format and your older schema.
+Coryl can load resources from a manifest file.
 
-Legacy format:
+Supported manifest formats:
+
+- JSON
+- TOML
+- YAML
+
+You can use either the legacy schema or the modern schema.
+
+### Legacy Schema
 
 ```json
 {
@@ -58,34 +311,257 @@ Legacy format:
 }
 ```
 
-Modern format:
+Load it like this:
+
+```python
+app = Coryl(root=".", manifest_path="app.json")
+print(app.settings_file_path)
+print(app.cache_directory_path)
+```
+
+### Modern Schema
+
+The modern schema lets you declare specialized roles.
+
+JSON example:
 
 ```json
 {
   "resources": {
     "settings": {
-      "path": "config/settings.json",
-      "kind": "file"
+      "path": "config/settings.toml",
+      "kind": "file",
+      "role": "config"
     },
-    "cache": {
-      "path": "runtime/cache",
-      "kind": "directory"
+    "http_cache": {
+      "path": ".cache/http",
+      "kind": "directory",
+      "role": "cache"
+    },
+    "ui": {
+      "path": "assets/ui",
+      "kind": "directory",
+      "role": "assets"
     }
   }
 }
 ```
 
-## Main API
+TOML example:
 
-- `Coryl(...)` or `ResourceManager(...)` creates a manager bound to one root folder.
-- `register_file()` and `register_directory()` add resources programmatically.
-- `content(name)` reads a resource automatically as JSON or text.
-- `write_content(name, value)` writes JSON, text, or bytes.
-- `directory(name).joinpath(...)` creates safe child resources inside managed folders.
+```toml
+[resources.settings]
+path = "config/settings.toml"
+kind = "file"
+role = "config"
 
-## Migration Notes
+[resources.http_cache]
+path = ".cache/http"
+kind = "directory"
+role = "cache"
 
-If you are migrating from your older `FileManager`, these convenience aliases are available:
+[resources.ui]
+path = "assets/ui"
+kind = "directory"
+role = "assets"
+```
+
+YAML example:
+
+```yaml
+resources:
+  settings:
+    path: config/settings.yaml
+    kind: file
+    role: config
+  http_cache:
+    path: .cache/http
+    kind: directory
+    role: cache
+  ui:
+    path: assets/ui
+    kind: directory
+    role: assets
+```
+
+Loading a manifest:
+
+```python
+app = Coryl(root=".", manifest_path="app.toml")
+
+settings = app.configs.get("settings")
+cache = app.caches.get("http_cache")
+ui = app.assets.get("ui")
+```
+
+Reloading a manifest after editing it:
+
+```python
+app.load_config()
+```
+
+Note: `load_config()` is kept mainly for compatibility with the older design. It reloads the manifest, not an application config resource.
+
+## Safety Model
+
+Coryl applies a few important safety rules:
+
+- All registered paths must stay inside the manager root
+- Child paths created from managed directories must stay inside those directories
+- Config resources must be structured files
+- Cache and asset resources must be directories
+
+This makes Coryl useful for applications that want predictable, centralized resource management without scattering `Path(...)` logic everywhere.
+
+## API Overview
+
+### Manager
+
+Main entry points:
+
+- `Coryl(root, resources=None, manifest_path=None, create_missing=True)`
+- `register_file(name, path, ...)`
+- `register_directory(name, path, ...)`
+- `register_config(name, path, ...)`
+- `register_cache(name, path, ...)`
+- `register_assets(name, path, ...)`
+- `resource(name)`
+- `file(name)`
+- `directory(name)`
+- `config_resource(name="config")`
+- `cache_resource(name)`
+- `asset_group(name)`
+- `path(name)`
+- `content(name, default=...)`
+- `write_content(name, value)`
+- `load_manifest(path)`
+- `load_config()`
+
+Namespaces:
+
+- `app.configs`
+- `app.caches`
+- `app.assets`
+
+### Generic Resource
+
+Useful methods:
+
+- `ensure()`
+- `exists()`
+- `read_text()`
+- `write_text(text)`
+- `read_bytes()`
+- `write_bytes(data)`
+- `read_data()`
+- `write_data(data)`
+- `read_json()`
+- `write_json(data)`
+- `read_toml()`
+- `write_toml(data)`
+- `read_yaml()`
+- `write_yaml(data)`
+- `content()`
+- `write(value)`
+
+### ConfigResource
+
+Additional helpers:
+
+- `load()`
+- `save(data)`
+- `update(...)`
+
+### CacheResource
+
+Additional helpers:
+
+- `entry(...)`
+- `file(...)`
+- `directory(...)`
+- `remember(..., content=...)`
+- `load(...)`
+- `delete(...)`
+- `clear()`
+
+### AssetGroup
+
+Additional helpers:
+
+- `file(...)`
+- `directory(...)`
+- `require(...)`
+- `files(pattern="**/*")`
+- `glob(pattern)`
+
+## Examples
+
+### Example 1: CLI Tool Configuration
+
+```python
+from coryl import Coryl
+
+app = Coryl(root=".")
+settings = app.configs.add("settings", "config/cli.toml")
+
+if not settings.path.read_text(encoding="utf-8").strip():
+    settings.save({"theme": "dark", "verbose": False})
+
+config = settings.load()
+print(config["theme"])
+```
+
+### Example 2: API Response Cache
+
+```python
+from coryl import Coryl
+
+app = Coryl(root=".")
+cache = app.caches.add("api", ".cache/api")
+
+cache.remember("users", "42.json", content={"id": 42, "name": "Ada"})
+user = cache.load("users", "42.json")
+print(user["name"])
+```
+
+### Example 3: Desktop App Assets
+
+```python
+from coryl import Coryl
+
+app = Coryl(root=".")
+assets = app.assets.add("desktop", "assets")
+
+icon = assets.require("icons", "app.png")
+templates = assets.directory("templates")
+
+print(icon.path)
+print(templates.path)
+```
+
+### Example 4: Declarative Startup
+
+```python
+from coryl import Coryl, ResourceSpec
+
+app = Coryl(
+    root=".",
+    resources={
+        "settings": ResourceSpec.config("config/settings.yaml"),
+        "cache": ResourceSpec.cache(".cache/app"),
+        "assets": ResourceSpec.assets("assets"),
+        "notes": ResourceSpec.file("data/notes.txt"),
+    },
+)
+
+app.configs.get("settings").save({"language": "en"})
+app.caches.get("cache").remember("session.json", content={"token": "abc"})
+print(app.assets.get("assets").files("**/*"))
+```
+
+## Compatibility Notes
+
+Coryl still exposes a few compatibility helpers inspired by the older `FileManager` design:
 
 - `root_folder_path`
 - `config_file_path`
@@ -93,4 +569,19 @@ If you are migrating from your older `FileManager`, these convenience aliases ar
 - `load_config()`
 - `content()`
 - `write_content()`
-- dynamic attributes like `settings_file_path` and `cache_directory_path`
+- dynamic attributes such as `settings_file_path` and `cache_directory_path`
+
+## Important Note About `config`
+
+The `config` property on `ResourceManager` is reserved for the loaded manifest content.
+
+For application configuration files, prefer:
+
+- `app.configs.add(...)`
+- `app.configs.get(...)`
+- `app.config_resource(...)`
+
+This avoids confusion between:
+
+- the manager manifest
+- your actual application settings files

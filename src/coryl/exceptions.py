@@ -24,3 +24,6 @@ class ResourceConflictError(CorylError, ValueError):
 class ManifestFormatError(CorylError, ValueError):
     """Raised when a manifest file cannot be interpreted."""
 
+
+class UnsupportedFormatError(CorylError, ValueError):
+    """Raised when a file format is unsupported for a requested operation."""

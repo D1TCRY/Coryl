@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -13,9 +12,143 @@ from .exceptions import (
     ResourceNotRegisteredError,
     UnsafePathError,
 )
-from .resources import MISSING, Resource, ResourceKind, ResourceSpec
+from .resources import (
+    MISSING,
+    AssetGroup,
+    CacheResource,
+    ConfigResource,
+    Resource,
+    ResourceKind,
+    ResourceSpec,
+    create_resource,
+)
+from .serialization import load_from_path
 
 ResourceInput = str | Path | ResourceSpec | Mapping[str, Any]
+
+
+class _NamespaceBase:
+    """Common helpers for typed resource namespaces."""
+
+    def __init__(self, manager: "ResourceManager") -> None:
+        self._manager = manager
+
+    def __contains__(self, name: str) -> bool:
+        try:
+            self.get(name)
+        except (ResourceNotRegisteredError, ResourceKindError):
+            return False
+        return True
+
+    def __getitem__(self, name: str):
+        return self.get(name)
+
+    def names(self) -> list[str]:
+        raise NotImplementedError
+
+    def all(self) -> dict[str, Resource]:
+        raise NotImplementedError
+
+    def get(self, name: str):
+        raise NotImplementedError
+
+
+class ConfigNamespace(_NamespaceBase):
+    """Register and retrieve config resources."""
+
+    def add(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        encoding: str = "utf-8",
+        replace: bool = False,
+    ) -> ConfigResource:
+        return self._manager.register_config(
+            name,
+            relative_path,
+            create=create,
+            encoding=encoding,
+            replace=replace,
+        )
+
+    def get(self, name: str = "config") -> ConfigResource:
+        return self._manager.config_resource(name)
+
+    def all(self) -> dict[str, ConfigResource]:
+        return {
+            name: resource
+            for name, resource in self._manager._resources.items()
+            if isinstance(resource, ConfigResource)
+        }
+
+    def names(self) -> list[str]:
+        return list(self.all())
+
+
+class CacheNamespace(_NamespaceBase):
+    """Register and retrieve cache directories."""
+
+    def add(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        replace: bool = False,
+    ) -> CacheResource:
+        return self._manager.register_cache(
+            name,
+            relative_path,
+            create=create,
+            replace=replace,
+        )
+
+    def get(self, name: str) -> CacheResource:
+        return self._manager.cache_resource(name)
+
+    def all(self) -> dict[str, CacheResource]:
+        return {
+            name: resource
+            for name, resource in self._manager._resources.items()
+            if isinstance(resource, CacheResource)
+        }
+
+    def names(self) -> list[str]:
+        return list(self.all())
+
+
+class AssetNamespace(_NamespaceBase):
+    """Register and retrieve asset directories."""
+
+    def add(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        replace: bool = False,
+    ) -> AssetGroup:
+        return self._manager.register_assets(
+            name,
+            relative_path,
+            create=create,
+            replace=replace,
+        )
+
+    def get(self, name: str) -> AssetGroup:
+        return self._manager.asset_group(name)
+
+    def all(self) -> dict[str, AssetGroup]:
+        return {
+            name: resource
+            for name, resource in self._manager._resources.items()
+            if isinstance(resource, AssetGroup)
+        }
+
+    def names(self) -> list[str]:
+        return list(self.all())
 
 
 class ResourceManager:
@@ -35,6 +168,9 @@ class ResourceManager:
         self._manifest_resource_names: set[str] = set()
         self._create_missing = create_missing
         self._resources: dict[str, Resource] = {}
+        self._configs = ConfigNamespace(self)
+        self._caches = CacheNamespace(self)
+        self._assets = AssetNamespace(self)
 
         if manifest_path is not None:
             self.load_manifest(manifest_path)
@@ -115,6 +251,18 @@ class ResourceManager:
         return dict(self._resources)
 
     @property
+    def configs(self) -> ConfigNamespace:
+        return self._configs
+
+    @property
+    def caches(self) -> CacheNamespace:
+        return self._caches
+
+    @property
+    def assets(self) -> AssetNamespace:
+        return self._assets
+
+    @property
     def file_paths(self) -> list[Path]:
         return [resource.path for resource in self._resources.values() if resource.kind == "file"]
 
@@ -132,12 +280,16 @@ class ResourceManager:
 
         raw_content = resolved_manifest_path.read_text(encoding="utf-8")
         try:
-            self._manifest_data = json.loads(raw_content)
-        except json.JSONDecodeError as error:
+            manifest_data = load_from_path(resolved_manifest_path, raw_content)
+        except Exception as error:
             raise ManifestFormatError(
-                f"Manifest file '{resolved_manifest_path}' is not valid JSON."
+                f"Manifest file '{resolved_manifest_path}' could not be loaded."
             ) from error
 
+        if not isinstance(manifest_data, Mapping):
+            raise ManifestFormatError("Manifest content must be a mapping.")
+
+        self._manifest_data = dict(manifest_data)
         parsed_resources = self._parse_manifest(self._manifest_data)
         for stale_name in self._manifest_resource_names - set(parsed_resources):
             self._resources.pop(stale_name, None)
@@ -167,12 +319,13 @@ class ResourceManager:
 
         spec = self._coerce_resource_spec(definition)
         resolved_path = self._resolve_from_root(spec.relative_path)
-        resource = Resource(
+        resource = create_resource(
             name=name,
             path=resolved_path,
             kind=spec.kind,
             create=spec.create,
             encoding=spec.encoding,
+            role=spec.role,
         )
         self._resources[name] = resource
         return resource
@@ -207,6 +360,62 @@ class ResourceManager:
         )
         return self.register(name, spec, replace=replace)
 
+    def register_config(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        encoding: str = "utf-8",
+        replace: bool = False,
+    ) -> ConfigResource:
+        self.register(
+            name,
+            ResourceSpec.config(
+                relative_path,
+                create=self._create_missing if create is None else create,
+                encoding=encoding,
+            ),
+            replace=replace,
+        )
+        return self.config_resource(name)
+
+    def register_cache(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        replace: bool = False,
+    ) -> CacheResource:
+        self.register(
+            name,
+            ResourceSpec.cache(
+                relative_path,
+                create=self._create_missing if create is None else create,
+            ),
+            replace=replace,
+        )
+        return self.cache_resource(name)
+
+    def register_assets(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        replace: bool = False,
+    ) -> AssetGroup:
+        self.register(
+            name,
+            ResourceSpec.assets(
+                relative_path,
+                create=self._create_missing if create is None else create,
+            ),
+            replace=replace,
+        )
+        return self.asset_group(name)
+
     def register_many(
         self,
         resources: Mapping[str, ResourceInput],
@@ -234,6 +443,24 @@ class ResourceManager:
         resource = self.resource(name)
         if resource.kind != "directory":
             raise ResourceKindError(f"Resource '{name}' is a file, not a directory.")
+        return resource
+
+    def config_resource(self, name: str = "config") -> ConfigResource:
+        resource = self.resource(name)
+        if not isinstance(resource, ConfigResource):
+            raise ResourceKindError(f"Resource '{name}' is not a config resource.")
+        return resource
+
+    def cache_resource(self, name: str) -> CacheResource:
+        resource = self.resource(name)
+        if not isinstance(resource, CacheResource):
+            raise ResourceKindError(f"Resource '{name}' is not a cache resource.")
+        return resource
+
+    def asset_group(self, name: str) -> AssetGroup:
+        resource = self.resource(name)
+        if not isinstance(resource, AssetGroup):
+            raise ResourceKindError(f"Resource '{name}' is not an asset resource.")
         return resource
 
     def path(self, name: str) -> Path:
@@ -275,6 +502,7 @@ class ResourceManager:
             kind = definition.get("kind")
             create = definition.get("create", self._create_missing)
             encoding = definition.get("encoding", "utf-8")
+            role = definition.get("role", "resource")
             if kind is None:
                 kind = self._infer_kind(path_value)
             return ResourceSpec(
@@ -282,6 +510,7 @@ class ResourceManager:
                 kind=kind,
                 create=bool(create),
                 encoding=str(encoding),
+                role=role,
             )
 
         raise TypeError(
