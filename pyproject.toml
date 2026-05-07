@@ -26,6 +26,7 @@ license-files = ["LICEN[CS]E*"]
 [project.optional-dependencies]
 lock = ["filelock>=3"]
 platform = ["platformdirs>=4"]
+pydantic = ["pydantic>=2", "pydantic-settings>=2"]
 
 [build-system]
 requires = ["setuptools>=77.0.0", "wheel"]

@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import shutil
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from importlib import import_module
 from importlib import resources as importlib_resources
 from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath
-from typing import IO, Literal
+from typing import IO, Callable, Literal, TypeVar, cast, overload
 
 from ._io import _atomic_write_bytes, _atomic_write_text
 from ._locks import managed_lock
 from ._paths import is_within_root, resolve_managed_path, validate_managed_path_input
 from .exceptions import (
+    CorylOptionalDependencyError,
     CorylPathError,
     CorylReadOnlyResourceError,
     CorylValidationError,
@@ -27,6 +32,12 @@ from .serialization import dump_to_path, load_from_path, structured_format_for_p
 ResourceKind = Literal["file", "directory"]
 ResourceRole = Literal["resource", "config", "cache", "assets", "data", "logs"]
 MISSING = object()
+TValidated = TypeVar("TValidated")
+TMigrationFunc = TypeVar("TMigrationFunc", bound=Callable[..., object])
+_INT_PATTERN = re.compile(r"^[+-]?(?:0|[1-9]\d*)$")
+_FLOAT_PATTERN = re.compile(
+    r"^[+-]?(?:(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +277,7 @@ class Resource:
     declared_format: str | None = None
     schema: str | None = None
     backend: str | None = None
+    typed_schema: type[object] | None = None
     managed_root: Path | None = None
     root_name: str = "root"
 
@@ -289,12 +301,16 @@ class Resource:
             raise CorylValidationError("Resource.schema must be a string when provided.")
         if self.backend is not None and not isinstance(self.backend, str):
             raise CorylValidationError("Resource.backend must be a string when provided.")
+        if self.typed_schema is not None and not isinstance(self.typed_schema, type):
+            raise CorylValidationError("Resource.typed_schema must be a type when provided.")
         if self.managed_root is not None:
             self.managed_root = Path(self.managed_root).resolve(strict=False)
         if self.role == "config" and self.kind != "file":
             raise CorylValidationError("Config resources must be files.")
         if self.role in {"cache", "assets"} and self.kind != "directory":
             raise CorylValidationError("Cache and asset resources must be directories.")
+        if self.typed_schema is not None and self.role != "config":
+            raise CorylValidationError("Typed schemas can only be attached to config resources.")
         if self.create:
             self.ensure()
 
@@ -596,21 +612,168 @@ class Resource:
         )
 
 
+@dataclass(slots=True)
 class ConfigResource(Resource):
     """Structured configuration file with load/save helpers."""
 
+    version: int | None = None
+    _migrations: dict[int, tuple[int, Callable[[dict[str, object]], object]]] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+
     def __post_init__(self) -> None:
-        super().__post_init__()
+        Resource.__post_init__(self)
         if self.format is None:
             raise UnsupportedFormatError(
                 "Config resources must use one of: .json, .toml, .yaml, .yml."
+            )
+        if self.version is not None and not _is_valid_version_number(self.version):
+            raise CorylValidationError(
+                "ConfigResource.version must be a non-negative integer when provided."
             )
 
     def load(self, *, default: object = MISSING) -> object:
         return self.read_data(default=default)
 
+    def get(self, key_path: str, default: object = None) -> object:
+        return _config_value_for_path(
+            self.load(),
+            key_path,
+            default=default,
+            resource_name=self.name,
+        )
+
+    @overload
+    def load_typed(self, model: type[TValidated]) -> TValidated: ...
+
+    @overload
+    def load_typed(self, model: None = None) -> object: ...
+
+    def load_typed(self, model: type[TValidated] | None = None) -> TValidated | object:
+        model_class = model or self.typed_schema
+        if model_class is None:
+            raise TypeError(
+                "ConfigResource.load_typed() requires a model argument or a schema "
+                "registered with this resource."
+            )
+
+        pydantic = _load_pydantic_module()
+        if not hasattr(model_class, "model_validate"):
+            raise TypeError(
+                "ConfigResource.load_typed() requires a Pydantic v2 model class with "
+                "model_validate()."
+            )
+
+        try:
+            return model_class.model_validate(self.load())
+        except pydantic.ValidationError as error:
+            raise CorylValidationError(
+                f"Configuration validation failed for resource '{self.name}': {error}"
+            ) from error
+
     def save(self, content: object, *, atomic: bool = True) -> Path:
         return self.write_data(content, atomic=atomic)
+
+    def save_typed(self, instance: object, *, atomic: bool = True) -> Path:
+        _load_pydantic_module()
+        if not hasattr(instance, "model_dump"):
+            raise TypeError(
+                "ConfigResource.save_typed() requires a Pydantic v2 model instance with "
+                "model_dump()."
+            )
+
+        payload = instance.model_dump(mode="json")
+        return self.save(payload, atomic=atomic)
+
+    def require(self, key_path: str, default: object = MISSING) -> object:
+        return _config_value_for_path(
+            self.load(),
+            key_path,
+            default=default,
+            resource_name=self.name,
+        )
+
+    def migration(
+        self,
+        *,
+        from_version: int,
+        to_version: int,
+    ) -> Callable[[TMigrationFunc], TMigrationFunc]:
+        if not _is_valid_version_number(from_version):
+            raise CorylValidationError("Migration from_version must be a non-negative integer.")
+        if not _is_valid_version_number(to_version):
+            raise CorylValidationError("Migration to_version must be a non-negative integer.")
+        if to_version <= from_version:
+            raise CorylValidationError("Migration to_version must be greater than from_version.")
+
+        def register_migration(func: TMigrationFunc) -> TMigrationFunc:
+            if from_version in self._migrations:
+                raise CorylValidationError(
+                    f"Resource '{self.name}' already has a migration registered from "
+                    f"version {from_version}."
+                )
+            self._migrations[from_version] = (
+                to_version,
+                cast(Callable[[dict[str, object]], object], func),
+            )
+            return func
+
+        return register_migration
+
+    def migrate(self) -> dict[str, object]:
+        if self.version is None:
+            raise CorylValidationError(
+                f"Config resource '{self.name}' does not define a target version. "
+                "Register it with version=... before calling migrate()."
+            )
+
+        document = self.load(default={})
+        if not isinstance(document, Mapping):
+            raise TypeError("ConfigResource.migrate() requires a mapping-based document.")
+
+        current_document = _copy_mapping(cast(Mapping[str, object], document))
+        current_version = _config_document_version(current_document, resource_name=self.name)
+        target_version = self.version
+
+        if current_version == target_version:
+            return current_document
+        if current_version > target_version:
+            raise CorylValidationError(
+                f"Config resource '{self.name}' is already at version {current_version}, "
+                f"which is newer than the target version {target_version}."
+            )
+
+        while current_version < target_version:
+            try:
+                next_version, migration_func = self._migrations[current_version]
+            except KeyError as error:
+                raise CorylValidationError(
+                    f"No migration registered for resource '{self.name}' from version "
+                    f"{current_version} toward target version {target_version}."
+                ) from error
+
+            if next_version > target_version:
+                raise CorylValidationError(
+                    f"Migration for resource '{self.name}' jumps from version "
+                    f"{current_version} to {next_version}, which overshoots target version "
+                    f"{target_version}."
+                )
+
+            migrated_document = migration_func(_copy_mapping(current_document))
+            if not isinstance(migrated_document, Mapping):
+                raise CorylValidationError(
+                    f"Migration for resource '{self.name}' from version {current_version} "
+                    f"to {next_version} must return a mapping."
+                )
+
+            current_document = _copy_mapping(cast(Mapping[str, object], migrated_document))
+            current_document["version"] = next_version
+            current_version = next_version
+
+        self.save(current_document)
+        return current_document
 
     def update(
         self,
@@ -638,31 +801,122 @@ class ConfigResource(Resource):
 
 @dataclass(slots=True)
 class LayeredConfigResource(ConfigResource):
-    """Configuration resource with simple secrets-directory overrides."""
+    """Configuration resource with explicit file layering and overrides."""
 
+    layer_paths: tuple[Path, ...] = ()
+    env_prefix: str | None = None
+    secrets_path: Path | None = None
     secrets_dir: Path | None = None
+    runtime_overrides: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         ConfigResource.__post_init__(self)
+        self.layer_paths = tuple(
+            Path(path).resolve(strict=False) for path in (self.layer_paths or (self.path,))
+        )
+        if self.env_prefix is not None:
+            if not isinstance(self.env_prefix, str) or not self.env_prefix.strip():
+                raise CorylValidationError(
+                    "LayeredConfigResource.env_prefix must be a non-empty string when provided."
+                )
+            self.env_prefix = self.env_prefix.strip()
+        if self.secrets_path is not None:
+            self.secrets_path = Path(self.secrets_path).resolve(strict=False)
         if self.secrets_dir is not None:
             self.secrets_dir = Path(self.secrets_dir).resolve(strict=False)
+        if not isinstance(self.runtime_overrides, Mapping):
+            raise CorylValidationError(
+                "LayeredConfigResource.runtime_overrides must be a mapping when provided."
+            )
+        self.runtime_overrides = _normalized_override_mapping(self.runtime_overrides)
+
+        for candidate in self.layer_paths:
+            if structured_format_for_path(candidate) is None:
+                raise UnsupportedFormatError(
+                    "Layered config files must use one of: .json, .toml, .yaml, .yml."
+                )
+        if self.secrets_path is not None and structured_format_for_path(self.secrets_path) is None:
+            raise UnsupportedFormatError(
+                "Layered config secrets files must use one of: .json, .toml, .yaml, .yml."
+            )
 
     def load(self, *, default: object = MISSING) -> object:
-        base_document = self.load_base(default=default)
+        if not self._uses_layering():
+            return self.load_base(default=default)
+
+        merged: dict[str, object] = {}
+        loaded_any_source = False
+        for candidate in self.layer_paths:
+            document = self._load_layer_file(candidate)
+            if document is None:
+                continue
+            merged = _deep_merge_dicts(merged, document)
+            loaded_any_source = True
+
+        secret_document = self._load_secret_document()
+        if secret_document is not None:
+            merged = _deep_merge_dicts(merged, secret_document)
+            loaded_any_source = True
+
         secret_overrides = self._load_secret_overrides()
-        if not secret_overrides:
-            return base_document
-        if not isinstance(base_document, Mapping):
-            raise TypeError(
-                "LayeredConfigResource.load() requires a mapping-based document when secrets_dir "
-                "is used."
-            )
-        merged = dict(base_document)
-        merged.update(secret_overrides)
+        if secret_overrides:
+            merged = _deep_merge_dicts(merged, secret_overrides)
+            loaded_any_source = True
+
+        environment_overrides = self._load_environment_overrides()
+        if environment_overrides:
+            merged = _deep_merge_dicts(merged, environment_overrides)
+            loaded_any_source = True
+
+        if self.runtime_overrides:
+            merged = _deep_merge_dicts(merged, self.runtime_overrides)
+            loaded_any_source = True
+
+        if not loaded_any_source and default is not MISSING:
+            return default
         return merged
 
     def load_base(self, *, default: object = MISSING) -> object:
         return ConfigResource.load(self, default=default)
+
+    def as_dict(self) -> dict[str, object]:
+        document = self.load(default={})
+        if not isinstance(document, Mapping):
+            raise TypeError("LayeredConfigResource.as_dict() requires a mapping-based document.")
+        return _copy_mapping(cast(Mapping[str, object], document))
+
+    def reload(self) -> dict[str, object]:
+        return self.as_dict()
+
+    def override(self, values: Mapping[str, object]) -> dict[str, object]:
+        if not isinstance(values, Mapping):
+            raise TypeError("LayeredConfigResource.override() requires a mapping of overrides.")
+        self.runtime_overrides = _deep_merge_dicts(
+            self.runtime_overrides,
+            _normalized_override_mapping(values),
+        )
+        return self.as_dict()
+
+    def apply_overrides(self, values: Iterable[str]) -> dict[str, object]:
+        overrides: dict[str, object] = {}
+        for raw_value in values:
+            if not isinstance(raw_value, str):
+                raise TypeError(
+                    "LayeredConfigResource.apply_overrides() values must be strings."
+                )
+            if "=" not in raw_value:
+                raise CorylValidationError(
+                    "LayeredConfigResource.apply_overrides() expects KEY=VALUE strings."
+                )
+            key_path, value = raw_value.split("=", 1)
+            normalized_key = key_path.strip()
+            if not normalized_key:
+                raise CorylValidationError(
+                    "LayeredConfigResource.apply_overrides() keys must be non-empty."
+                )
+            _set_dotted_path(overrides, normalized_key, _parse_conservative_value(value.strip()))
+
+        return self.override(overrides)
 
     def update(
         self,
@@ -687,10 +941,77 @@ class LayeredConfigResource(ConfigResource):
                 return apply_update()
         return apply_update()
 
+    def _uses_layering(self) -> bool:
+        return (
+            len(self.layer_paths) > 1
+            or self.secrets_path is not None
+            or self.secrets_dir is not None
+            or self.env_prefix is not None
+            or bool(self.runtime_overrides)
+        )
+
+    def _load_layer_file(self, candidate: Path) -> dict[str, object] | None:
+        return self._load_mapping_file(candidate, source_label="layered config file")
+
+    def _load_secret_document(self) -> dict[str, object] | None:
+        if self.secrets_path is None:
+            return None
+        return self._load_mapping_file(self.secrets_path, source_label="layered config secrets")
+
+    def _load_mapping_file(
+        self,
+        candidate: Path,
+        *,
+        source_label: str,
+    ) -> dict[str, object] | None:
+        if not candidate.exists():
+            if self.required:
+                raise FileNotFoundError(
+                    f"Required {source_label} '{candidate}' is missing for resource "
+                    f"'{self.name}'."
+                )
+            return None
+        if not candidate.is_file():
+            raise ResourceKindError(f"{source_label.capitalize()} '{candidate}' is not a file.")
+
+        raw_content = candidate.read_text(encoding=self.encoding)
+        document = load_from_path(candidate, raw_content)
+        if not isinstance(document, Mapping):
+            raise TypeError(
+                f"{source_label.capitalize()} '{candidate}' must contain a mapping document."
+            )
+        return _copy_mapping(cast(Mapping[str, object], document))
+
+    def _load_environment_overrides(self) -> dict[str, object]:
+        if self.env_prefix is None:
+            return {}
+
+        prefix = f"{self.env_prefix}_"
+        overrides: dict[str, object] = {}
+        matching_names = sorted(name for name in os.environ if name.startswith(prefix))
+        for env_name in matching_names:
+            raw_key = env_name[len(prefix) :]
+            if not raw_key:
+                continue
+            parts = [part.strip().lower() for part in raw_key.split("__")]
+            if not parts or any(not part for part in parts):
+                continue
+            _set_dotted_path(
+                overrides,
+                ".".join(parts),
+                _parse_conservative_value(os.environ[env_name]),
+            )
+        return overrides
+
     def _load_secret_overrides(self) -> dict[str, str]:
         if self.secrets_dir is None:
             return {}
         if not self.secrets_dir.exists():
+            if self.required:
+                raise FileNotFoundError(
+                    f"Required layered config secrets directory '{self.secrets_dir}' is missing "
+                    f"for resource '{self.name}'."
+                )
             return {}
         if not self.secrets_dir.is_dir():
             raise CorylValidationError("Layered config secrets_dir must point to a directory.")
@@ -1092,6 +1413,8 @@ def create_resource(
     declared_format: str | None = None,
     schema: str | None = None,
     backend: str | None = None,
+    typed_schema: type[object] | None = None,
+    version: int | None = None,
     managed_root: Path | None = None,
     root_name: str = "root",
 ) -> Resource:
@@ -1105,18 +1428,181 @@ def create_resource(
     else:
         resource_class = Resource
 
+    resource_kwargs: dict[str, object] = {
+        "name": name,
+        "path": path,
+        "kind": kind,
+        "create": create,
+        "encoding": encoding,
+        "role": role,
+        "readonly": readonly,
+        "required": required,
+        "declared_format": declared_format,
+        "schema": schema,
+        "backend": backend,
+        "typed_schema": typed_schema,
+        "managed_root": managed_root,
+        "root_name": root_name,
+    }
+    if issubclass(resource_class, ConfigResource):
+        resource_kwargs["version"] = version
+
     return resource_class(
-        name=name,
-        path=path,
-        kind=kind,
-        create=create,
-        encoding=encoding,
-        role=role,
-        readonly=readonly,
-        required=required,
-        declared_format=declared_format,
-        schema=schema,
-        backend=backend,
-        managed_root=managed_root,
-        root_name=root_name,
+        **resource_kwargs,
     )
+
+
+def _copy_mapping(mapping: Mapping[str, object]) -> dict[str, object]:
+    return {key: _copy_config_value(value) for key, value in mapping.items()}
+
+
+def _copy_config_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return _copy_mapping(cast(Mapping[str, object], value))
+    if isinstance(value, list):
+        return [_copy_config_value(item) for item in value]
+    return value
+
+
+def _deep_merge_dicts(
+    base: Mapping[str, object],
+    override: Mapping[str, object],
+) -> dict[str, object]:
+    merged = _copy_mapping(base)
+    for key, value in override.items():
+        current_value = merged.get(key)
+        if isinstance(current_value, Mapping) and isinstance(value, Mapping):
+            merged[key] = _deep_merge_dicts(
+                cast(Mapping[str, object], current_value),
+                cast(Mapping[str, object], value),
+            )
+            continue
+        merged[key] = _copy_config_value(value)
+    return merged
+
+
+def _normalized_override_mapping(values: Mapping[str, object]) -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    for raw_key, value in values.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise TypeError("Override keys must be non-empty strings.")
+        if "." in raw_key:
+            _set_dotted_path(normalized, raw_key, _copy_config_value(value))
+            continue
+        if isinstance(value, Mapping):
+            normalized[raw_key] = _copy_mapping(cast(Mapping[str, object], value))
+            continue
+        normalized[raw_key] = _copy_config_value(value)
+    return normalized
+
+
+def _set_dotted_path(target: dict[str, object], key_path: str, value: object) -> None:
+    parts = [part.strip() for part in key_path.split(".")]
+    if not parts or any(not part for part in parts):
+        raise CorylValidationError(f"Invalid dotted key path {key_path!r}.")
+
+    current = target
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = _copy_config_value(value)
+
+
+def _config_value_for_path(
+    document: object,
+    key_path: str,
+    *,
+    default: object = MISSING,
+    resource_name: str,
+) -> object:
+    if not isinstance(key_path, str) or not key_path.strip():
+        raise TypeError("Config key_path must be a non-empty string.")
+
+    current = document
+    for part in key_path.split("."):
+        if isinstance(current, Mapping) and part in current:
+            current = current[part]
+            continue
+        if isinstance(current, list) and part.isdigit():
+            index = int(part)
+            if index < len(current):
+                current = current[index]
+                continue
+        if default is not MISSING:
+            return default
+        raise CorylValidationError(
+            f"Required configuration value '{key_path}' is missing from resource "
+            f"'{resource_name}'."
+        )
+
+    return current
+
+
+def _parse_conservative_value(raw_value: str) -> object:
+    stripped = raw_value.strip()
+    lowered = stripped.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in {"null", "none"}:
+        return None
+    if _INT_PATTERN.fullmatch(stripped):
+        return int(stripped)
+    if _FLOAT_PATTERN.fullmatch(stripped) and any(marker in lowered for marker in (".", "e")):
+        return float(stripped)
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return raw_value
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    return raw_value
+
+
+def _config_document_version(
+    document: Mapping[str, object],
+    *,
+    resource_name: str,
+) -> int:
+    raw_version = document.get("version")
+    if not _is_valid_version_number(raw_version):
+        raise CorylValidationError(
+            f"Config resource '{resource_name}' must contain a top-level integer 'version' "
+            "before migrate() can run."
+        )
+    return cast(int, raw_version)
+
+
+def _is_valid_version_number(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _load_pydantic_module() -> object:
+    try:
+        module = import_module("pydantic")
+    except ModuleNotFoundError as error:
+        raise CorylOptionalDependencyError(
+            "Typed config helpers require the optional 'pydantic' dependencies. "
+            "Install them with 'pip install coryl[pydantic]'."
+        ) from error
+
+    try:
+        base_model = module.BaseModel
+        module.ValidationError
+    except AttributeError as error:  # pragma: no cover - defensive
+        raise CorylOptionalDependencyError(
+            "The installed 'pydantic' package does not expose the expected validation API."
+        ) from error
+
+    if not hasattr(base_model, "model_validate"):
+        raise CorylOptionalDependencyError(
+            "Typed config helpers require Pydantic v2. Install it with "
+            "'pip install coryl[pydantic]'."
+        )
+
+    return module

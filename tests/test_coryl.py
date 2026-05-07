@@ -14,6 +14,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
+import coryl.resources as coryl_resources
+
 from coryl import (
     AssetGroup,
     CacheResource,
@@ -328,6 +330,197 @@ class CorylTests(unittest.TestCase):
         )
         self.assertEqual(settings.load()["timezone"], "Europe/Rome")
 
+    def test_config_load_typed_validates_data(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.json")
+        fake_pydantic = self._make_fake_pydantic_module()
+        settings.save({"host": "localhost", "port": 5432, "debug": True})
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_pydantic):
+            loaded = settings.load_typed(fake_pydantic.SettingsModel)
+
+        self.assertIsInstance(loaded, fake_pydantic.SettingsModel)
+        self.assertEqual(loaded.host, "localhost")
+        self.assertEqual(loaded.port, 5432)
+        self.assertTrue(loaded.debug)
+
+    def test_config_load_typed_uses_registered_schema_when_available(self) -> None:
+        manager = Coryl(self.root)
+        fake_pydantic = self._make_fake_pydantic_module()
+        settings = manager.configs.add(
+            "settings",
+            "config/settings.toml",
+            schema=fake_pydantic.SettingsModel,
+        )
+        settings.save({"host": "localhost", "port": 5432, "debug": False})
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_pydantic):
+            loaded = settings.load_typed()
+
+        self.assertIsInstance(loaded, fake_pydantic.SettingsModel)
+        self.assertFalse(loaded.debug)
+
+    def test_config_load_typed_invalid_data_raises_validation_error(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.yaml")
+        fake_pydantic = self._make_fake_pydantic_module()
+        settings.save({"host": "localhost", "port": "not-an-int"})
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_pydantic):
+            with self.assertRaises(CorylValidationError) as caught:
+                settings.load_typed(fake_pydantic.SettingsModel)
+
+        self.assertIn("Configuration validation failed", str(caught.exception))
+        self.assertIn("settings", str(caught.exception))
+
+    def test_config_save_typed_writes_expected_data(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.yaml")
+        fake_pydantic = self._make_fake_pydantic_module()
+        instance = fake_pydantic.SettingsModel("localhost", 5432, True)
+
+        with mock.patch("coryl.resources.import_module", return_value=fake_pydantic):
+            settings.save_typed(instance)
+
+        self.assertEqual(
+            settings.load(),
+            {"host": "localhost", "port": 5432, "debug": True},
+        )
+
+    def test_typed_config_helpers_require_optional_pydantic_extra(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.json")
+        settings.save({"host": "localhost", "port": 5432})
+        fake_pydantic = self._make_fake_pydantic_module()
+
+        with mock.patch(
+            "coryl.resources.import_module",
+            side_effect=ModuleNotFoundError("No module named 'pydantic'"),
+        ):
+            with self.assertRaises(CorylOptionalDependencyError) as caught:
+                settings.load_typed(fake_pydantic.SettingsModel)
+
+        self.assertIn("pip install coryl[pydantic]", str(caught.exception))
+
+    def test_config_require_supports_dot_paths(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.json")
+        settings.save(
+            {
+                "database": {
+                    "host": "localhost",
+                    "ports": [5432, 5433],
+                }
+            }
+        )
+
+        self.assertEqual(settings.require("database.host"), "localhost")
+        self.assertEqual(settings.require("database.ports.1"), 5433)
+        self.assertEqual(settings.require("database.user", "postgres"), "postgres")
+
+        with self.assertRaises(CorylValidationError) as caught:
+            settings.require("database.user")
+
+        self.assertIn("database.user", str(caught.exception))
+
+    def test_config_migrate_applies_v1_to_v2_migration(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.toml", version=2)
+        settings.save({"version": 1, "theme": "light"})
+
+        @settings.migration(from_version=1, to_version=2)
+        def migrate_v1_to_v2(data: dict[str, object]) -> dict[str, object]:
+            theme = data.pop("theme")
+            data["appearance"] = {"theme": theme}
+            return data
+
+        migrated = settings.migrate()
+
+        self.assertEqual(
+            migrated,
+            {"version": 2, "appearance": {"theme": "light"}},
+        )
+        self.assertEqual(settings.load(), migrated)
+
+    def test_config_migrate_applies_multiple_sequential_migrations(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.toml", version=3)
+        settings.save({"version": 1, "theme": "light"})
+
+        @settings.migration(from_version=1, to_version=2)
+        def migrate_v1_to_v2(data: dict[str, object]) -> dict[str, object]:
+            data["appearance"] = {"theme": data.pop("theme")}
+            return data
+
+        @settings.migration(from_version=2, to_version=3)
+        def migrate_v2_to_v3(data: dict[str, object]) -> dict[str, object]:
+            appearance = data.setdefault("appearance", {})
+            if not isinstance(appearance, dict):
+                raise AssertionError("appearance should be a dict during the migration test.")
+            appearance["mode"] = "system"
+            return data
+
+        migrated = settings.migrate()
+
+        self.assertEqual(
+            migrated,
+            {"version": 3, "appearance": {"theme": "light", "mode": "system"}},
+        )
+
+    def test_config_migrate_missing_path_raises_clear_error(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.toml", version=3)
+        settings.save({"version": 1, "theme": "light"})
+
+        @settings.migration(from_version=1, to_version=2)
+        def migrate_v1_to_v2(data: dict[str, object]) -> dict[str, object]:
+            data["appearance"] = {"theme": data.pop("theme")}
+            return data
+
+        with self.assertRaises(CorylValidationError) as caught:
+            settings.migrate()
+
+        self.assertIn("No migration registered", str(caught.exception))
+        self.assertIn("target version 3", str(caught.exception))
+
+    def test_config_migrate_when_already_current_does_not_save(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.toml", version=2)
+        settings.save({"version": 2, "theme": "light"})
+
+        with mock.patch(
+            "coryl.resources._atomic_write_text",
+            wraps=coryl_resources._atomic_write_text,
+        ) as atomic_write:
+            migrated = settings.migrate()
+
+        atomic_write.assert_not_called()
+        self.assertEqual(migrated, {"version": 2, "theme": "light"})
+        self.assertEqual(settings.load(), {"version": 2, "theme": "light"})
+
+    def test_config_migrate_saves_migrated_file_atomically(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.yaml", version=2)
+        settings.save({"version": 1, "theme": "light"})
+
+        @settings.migration(from_version=1, to_version=2)
+        def migrate_v1_to_v2(data: dict[str, object]) -> dict[str, object]:
+            data["appearance"] = {"theme": data.pop("theme")}
+            return data
+
+        with mock.patch(
+            "coryl.resources._atomic_write_text",
+            wraps=coryl_resources._atomic_write_text,
+        ) as atomic_write:
+            migrated = settings.migrate()
+
+        atomic_write.assert_called_once()
+        self.assertEqual(
+            migrated,
+            {"version": 2, "appearance": {"theme": "light"}},
+        )
+        self.assertEqual(self._temporary_files_for(settings.path), [])
+
     def test_layered_config_uses_secrets_dir_as_final_override(self) -> None:
         settings_path = self.root / "config" / "settings.yaml"
         settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +550,266 @@ token: base-token
             settings.load(),
             {"theme": "light", "token": "secret-token", "region": "eu-west-1"},
         )
+
+    def test_layered_config_applies_explicit_merge_order(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "defaults.toml").write_text(
+            """
+debug = false
+
+[database]
+host = "defaults-host"
+port = 5432
+""".strip(),
+            encoding="utf-8",
+        )
+        (config_dir / "local.toml").write_text(
+            """
+[database]
+host = "local-host"
+""".strip(),
+            encoding="utf-8",
+        )
+        (config_dir / "production.toml").write_text(
+            """
+[database]
+host = "production-host"
+port = 6432
+""".strip(),
+            encoding="utf-8",
+        )
+        (config_dir / ".secrets.toml").write_text(
+            """
+[database]
+host = "secret-host"
+password = "top-secret"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root)
+        settings = manager.configs.layered(
+            "settings",
+            files=[
+                "config/defaults.toml",
+                "config/local.toml",
+                "config/production.toml",
+            ],
+            env_prefix="MYAPP",
+            secrets="config/.secrets.toml",
+        )
+
+        with mock.patch.dict(os.environ, {"MYAPP_DATABASE__HOST": "env-host"}, clear=False):
+            settings.override({"database.host": "runtime-host"})
+            loaded = settings.as_dict()
+
+        self.assertEqual(loaded["database"]["host"], "runtime-host")
+        self.assertEqual(loaded["database"]["port"], 6432)
+        self.assertEqual(loaded["database"]["password"], "top-secret")
+        self.assertFalse(loaded["debug"])
+
+    def test_layered_config_deep_merges_dicts_and_replaces_lists(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "defaults.toml").write_text(
+            """
+features = ["a", "b"]
+
+[database]
+host = "localhost"
+
+[database.options]
+pool = 5
+ssl = true
+""".strip(),
+            encoding="utf-8",
+        )
+        (config_dir / "local.toml").write_text(
+            """
+features = ["c"]
+
+[database.options]
+ssl = false
+timeout = 30
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root)
+        settings = manager.configs.layered(
+            "settings",
+            files=["config/defaults.toml", "config/local.toml"],
+        )
+
+        loaded = settings.as_dict()
+
+        self.assertEqual(loaded["features"], ["c"])
+        self.assertEqual(
+            loaded["database"]["options"],
+            {"pool": 5, "ssl": False, "timeout": 30},
+        )
+
+    def test_layered_config_environment_overrides_parse_conservatively(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "defaults.toml").write_text(
+            """
+debug = false
+
+[database]
+port = 5000
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root)
+        settings = manager.configs.layered(
+            "settings",
+            files=["config/defaults.toml"],
+            env_prefix="MYAPP",
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MYAPP_DEBUG": "true",
+                "MYAPP_DATABASE__PORT": "6543",
+                "MYAPP_SERVICE__TIMEOUT": "1.5",
+                "MYAPP_FEATURES": "[1, 2, 3]",
+                "MYAPP_METADATA": '{"region": "eu"}',
+                "MYAPP_HOST": "localhost",
+            },
+            clear=False,
+        ):
+            loaded = settings.as_dict()
+
+        self.assertTrue(loaded["debug"])
+        self.assertEqual(loaded["database"]["port"], 6543)
+        self.assertEqual(loaded["service"]["timeout"], 1.5)
+        self.assertEqual(loaded["features"], [1, 2, 3])
+        self.assertEqual(loaded["metadata"], {"region": "eu"})
+        self.assertEqual(loaded["host"], "localhost")
+
+    def test_layered_config_secrets_file_overrides_regular_files(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "defaults.toml").write_text(
+            """
+token = "base-token"
+""".strip(),
+            encoding="utf-8",
+        )
+        (config_dir / ".secrets.toml").write_text(
+            """
+token = "secret-token"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root)
+        settings = manager.configs.layered(
+            "settings",
+            files=["config/defaults.toml"],
+            secrets="config/.secrets.toml",
+        )
+
+        self.assertEqual(settings.as_dict()["token"], "secret-token")
+
+    def test_layered_config_runtime_override_helpers_and_reload(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        defaults_path = config_dir / "defaults.toml"
+        defaults_path.write_text(
+            """
+debug = false
+
+[database]
+host = "file-host"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root)
+        settings = manager.configs.layered(
+            "settings",
+            files=["config/defaults.toml"],
+        )
+
+        settings.override({"database.host": "override-host"})
+        settings.apply_overrides(["debug=true", "database.port=6432"])
+
+        defaults_path.write_text(
+            """
+debug = false
+
+[database]
+host = "file-host-updated"
+name = "primary"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        reloaded = settings.reload()
+
+        self.assertEqual(reloaded["database"]["host"], "override-host")
+        self.assertEqual(reloaded["database"]["port"], 6432)
+        self.assertEqual(reloaded["database"]["name"], "primary")
+        self.assertTrue(reloaded["debug"])
+
+    def test_layered_config_required_files_are_enforced_when_requested(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "defaults.toml").write_text(
+            """
+debug = false
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root)
+        optional_settings = manager.configs.layered(
+            "optional_settings",
+            files=["config/defaults.toml", "config/local.toml"],
+            create=False,
+            required=False,
+        )
+        required_settings = manager.configs.layered(
+            "required_settings",
+            files=["config/defaults.toml", "config/local.toml"],
+            create=False,
+            required=True,
+        )
+
+        self.assertEqual(optional_settings.as_dict()["debug"], False)
+        with self.assertRaises(FileNotFoundError):
+            required_settings.load()
+
+    def test_layered_config_get_require_and_as_dict_support_dot_paths(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "defaults.toml").write_text(
+            """
+[database]
+host = "localhost"
+ports = [5432, 5433]
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root)
+        settings = manager.configs.layered(
+            "settings",
+            files=["config/defaults.toml"],
+        )
+
+        self.assertEqual(settings.get("database.host"), "localhost")
+        self.assertEqual(settings.get("database.user"), None)
+        self.assertEqual(settings.require("database.ports.1"), 5433)
+        self.assertEqual(settings.as_dict()["database"]["host"], "localhost")
+
+        with self.assertRaises(CorylValidationError):
+            settings.require("database.user")
 
     def test_readonly_config_cannot_save_or_update(self) -> None:
         settings_path = self.root / "config" / "settings.yaml"
@@ -1058,6 +1511,52 @@ resources:
                         path.mkdir(parents=True, exist_ok=True)
 
         return types.SimpleNamespace(PlatformDirs=FakePlatformDirs), calls
+
+    def _make_fake_pydantic_module(self) -> types.SimpleNamespace:
+        class FakeValidationError(Exception):
+            pass
+
+        class FakeBaseModel:
+            @classmethod
+            def model_validate(cls, data: object) -> object:
+                raise NotImplementedError
+
+        class SettingsModel(FakeBaseModel):
+            def __init__(self, host: str, port: int, debug: bool = False) -> None:
+                self.host = host
+                self.port = port
+                self.debug = debug
+
+            @classmethod
+            def model_validate(cls, data: object) -> "SettingsModel":
+                if not isinstance(data, dict):
+                    raise FakeValidationError("Input should be a mapping.")
+
+                host = data.get("host")
+                port = data.get("port")
+                debug = data.get("debug", False)
+                if not isinstance(host, str):
+                    raise FakeValidationError("host must be a string.")
+                if not isinstance(port, int):
+                    raise FakeValidationError("port must be an integer.")
+                if not isinstance(debug, bool):
+                    raise FakeValidationError("debug must be a boolean.")
+                return cls(host, port, debug)
+
+            def model_dump(self, *, mode: str = "python") -> dict[str, object]:
+                if mode != "json":
+                    raise AssertionError(f"Unexpected dump mode: {mode!r}")
+                return {
+                    "host": self.host,
+                    "port": self.port,
+                    "debug": self.debug,
+                }
+
+        return types.SimpleNamespace(
+            BaseModel=FakeBaseModel,
+            ValidationError=FakeValidationError,
+            SettingsModel=SettingsModel,
+        )
 
 
 if __name__ == "__main__":

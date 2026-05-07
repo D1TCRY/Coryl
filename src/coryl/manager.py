@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from importlib import import_module, resources as importlib_resources
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath
 from typing import Generic, TypeVar
@@ -80,6 +80,8 @@ class ConfigNamespace(_NamespaceBase[ConfigResource]):
         create: bool | None = None,
         encoding: str = "utf-8",
         readonly: bool = False,
+        version: int | None = None,
+        schema: type[object] | None = None,
         replace: bool = False,
     ) -> ConfigResource:
         return self._manager.register_config(
@@ -88,27 +90,41 @@ class ConfigNamespace(_NamespaceBase[ConfigResource]):
             create=create,
             encoding=encoding,
             readonly=readonly,
+            version=version,
+            schema=schema,
             replace=replace,
         )
 
     def layered(
         self,
         name: str,
-        relative_path: str | Path,
+        relative_path: str | Path | None = None,
         *,
+        files: Sequence[str | Path] | None = None,
         create: bool | None = None,
         encoding: str = "utf-8",
         readonly: bool = False,
+        env_prefix: str | None = None,
+        secrets: str | Path | None = None,
+        required: bool = False,
         secrets_dir: str | Path | None = None,
+        version: int | None = None,
+        schema: type[object] | None = None,
         replace: bool = False,
     ) -> LayeredConfigResource:
         return self._manager.register_layered_config(
             name,
             relative_path,
+            files=files,
             create=create,
             encoding=encoding,
             readonly=readonly,
+            env_prefix=env_prefix,
+            secrets=secrets,
+            required=required,
             secrets_dir=secrets_dir,
+            version=version,
+            schema=schema,
             replace=replace,
         )
 
@@ -598,9 +614,11 @@ class ResourceManager:
         create: bool | None = None,
         encoding: str = "utf-8",
         readonly: bool = False,
+        version: int | None = None,
+        schema: type[object] | None = None,
         replace: bool = False,
     ) -> ConfigResource:
-        self.register(
+        self._register_spec(
             name,
             ResourceSpec.config(
                 relative_path,
@@ -609,31 +627,50 @@ class ResourceManager:
                 readonly=readonly,
             ),
             replace=replace,
+            version=version,
+            typed_schema=schema,
         )
         return self.config_resource(name)
 
     def register_layered_config(
         self,
         name: str,
-        relative_path: str | Path,
+        relative_path: str | Path | None = None,
         *,
+        files: Sequence[str | Path] | None = None,
         create: bool | None = None,
         encoding: str = "utf-8",
         readonly: bool = False,
+        env_prefix: str | None = None,
+        secrets: str | Path | None = None,
+        required: bool = False,
         secrets_dir: str | Path | None = None,
+        version: int | None = None,
+        schema: type[object] | None = None,
         replace: bool = False,
     ) -> LayeredConfigResource:
         self._validate_resource_name(name)
         self._ensure_replaceable(name, replace=replace)
+        if secrets is not None and secrets_dir is not None:
+            raise TypeError(
+                "register_layered_config() accepts either 'secrets' or 'secrets_dir', not both."
+            )
 
+        layer_relative_paths = self._normalize_layered_relative_paths(relative_path, files=files)
+        primary_relative_path = layer_relative_paths[-1]
         spec = ResourceSpec.config(
-            relative_path,
+            primary_relative_path,
             create=self._default_create_value(create, readonly=readonly),
             encoding=encoding,
             readonly=readonly,
+            required=required,
         )
         root_name = CONFIG_ROOT_NAME
-        resolved_path = self._resolve_from_named_root(spec.relative_path, root_name=root_name)
+        resolved_layer_paths = tuple(
+            self._resolve_from_named_root(layer_path, root_name=root_name)
+            for layer_path in layer_relative_paths
+        )
+        resolved_path = resolved_layer_paths[-1]
         resource = LayeredConfigResource(
             name=name,
             path=resolved_path,
@@ -646,8 +683,13 @@ class ResourceManager:
             declared_format=spec.format,
             schema=spec.schema,
             backend=spec.backend,
+            typed_schema=schema,
+            version=version,
             managed_root=self._root_path_for(root_name),
             root_name=root_name,
+            layer_paths=resolved_layer_paths,
+            env_prefix=env_prefix,
+            secrets_path=self._resolve_optional_rooted_path(secrets, root_name=root_name),
             secrets_dir=self._resolve_secrets_dir(secrets_dir, root_name=root_name),
         )
         self._resources[name] = resource
@@ -900,6 +942,8 @@ class ResourceManager:
         *,
         replace: bool = False,
         root_name: str | None = None,
+        version: int | None = None,
+        typed_schema: type[object] | None = None,
     ) -> Resource:
         self._validate_resource_name(name)
         self._ensure_replaceable(name, replace=replace)
@@ -922,6 +966,8 @@ class ResourceManager:
             declared_format=spec.format,
             schema=spec.schema,
             backend=spec.backend,
+            typed_schema=typed_schema,
+            version=version,
             managed_root=managed_root,
             root_name=actual_root_name,
         )
@@ -1207,6 +1253,43 @@ class ResourceManager:
         if raw_path.is_absolute():
             return raw_path.resolve(strict=False)
         return self._resolve_from_named_root(raw_path, root_name=root_name)
+
+    def _resolve_optional_rooted_path(
+        self,
+        path_value: str | Path | None,
+        *,
+        root_name: str = DEFAULT_ROOT_NAME,
+    ) -> Path | None:
+        if path_value is None:
+            return None
+
+        raw_path = validate_managed_path_input(path_value, allow_absolute=True)
+        if raw_path.is_absolute():
+            return raw_path.resolve(strict=False)
+        return self._resolve_from_named_root(raw_path, root_name=root_name)
+
+    @staticmethod
+    def _normalize_layered_relative_paths(
+        relative_path: str | Path | None,
+        *,
+        files: Sequence[str | Path] | None,
+    ) -> tuple[Path, ...]:
+        if files is not None:
+            if isinstance(files, (str, Path)):
+                raise TypeError(
+                    "configs.layered() 'files' must be a sequence of paths, not a single path."
+                )
+            if relative_path is not None:
+                raise TypeError(
+                    "configs.layered() accepts either a positional path or 'files=', not both."
+                )
+            if not files:
+                raise TypeError("configs.layered() 'files' must contain at least one path.")
+            return tuple(Path(path_value) for path_value in files)
+
+        if relative_path is None:
+            raise TypeError("configs.layered() requires a path or a non-empty 'files' list.")
+        return (Path(relative_path),)
 
     @staticmethod
     def _package_relative_path(relative_path: str | Path) -> Path:

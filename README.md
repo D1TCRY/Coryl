@@ -42,6 +42,12 @@ Optional platform-aware app roots:
 pip install coryl[platform]
 ```
 
+Optional typed config validation with Pydantic:
+
+```bash
+pip install coryl[pydantic]
+```
+
 Python 3.10+ is supported.
 
 ## Core Idea
@@ -200,10 +206,16 @@ Supported config formats:
 Config resources provide:
 
 - `load()`
+- `load_typed(model=None)`
 - `save(data)`
+- `save_typed(instance)`
+- `get("dot.path", default=None)`
+- `require("dot.path")`
 - `update(...)`
 
-For layered container-style config, use `configs.layered(...)` with `secrets_dir=...`. Coryl loads the main config file first, then treats each file in `secrets_dir` as a final key/value override layer.
+Optional, lightweight config migrations are also available when local config files need to change shape between app versions. This is not a full migration framework: Coryl does not keep migration history, discover migrations automatically, or add database-like migration state. You register explicit Python functions on a config resource and call `migrate()` when you want to upgrade the file in place.
+
+For layered config, use `configs.layered(...)`. This is intentionally smaller than Dynaconf or Hydra: Coryl gives you ordered file layers, deep-merged dictionaries, optional environment overrides, optional secrets, and explicit runtime overrides. There is no plugin system, implicit environment switching, or hidden discovery in this step.
 
 Example:
 
@@ -216,17 +228,94 @@ settings.update(language="it", timezone="Europe/Rome")
 print(settings.load())
 ```
 
+Optional typed config validation works with Pydantic v2 or `pydantic-settings`, but Coryl itself does not require either dependency unless you call the typed helpers.
+
+```python
+from pydantic import BaseModel
+
+
+class SettingsModel(BaseModel):
+    host: str
+    port: int
+    debug: bool = False
+
+
+settings = app.configs.add(
+    "settings",
+    "config/settings.toml",
+    schema=SettingsModel,
+)
+
+settings.save_typed(SettingsModel(host="localhost", port=5432, debug=True))
+typed_settings = settings.load_typed()
+print(typed_settings.port)
+print(settings.require("host"))
+```
+
+Install the optional extra first:
+
+```bash
+pip install coryl[pydantic]
+```
+
+Config migration example:
+
+```python
+settings = app.configs.add("settings", "config/settings.toml", version=2)
+
+
+@settings.migration(from_version=1, to_version=2)
+def migrate_v1_to_v2(data):
+    theme = data.pop("theme", "light")
+    data["appearance"] = {"theme": theme}
+    return data
+
+
+settings.migrate()
+print(settings.load()["version"])
+```
+
+The config file should contain a top-level integer `version`. Coryl applies registered migrations sequentially until it reaches the configured target version, then saves the migrated file atomically.
+
 Layered config example:
 
 ```python
 settings = app.configs.layered(
     "settings",
-    "config/settings.yaml",
-    secrets_dir="/run/secrets",
+    files=[
+        "config/defaults.toml",
+        "config/local.toml",
+        "config/production.toml",
+    ],
+    env_prefix="MYAPP",
+    secrets="config/.secrets.toml",
+    required=False,
 )
 
-print(settings.load())
+settings.apply_overrides(["database.host=localhost", "debug=true"])
+
+print(settings.get("database.host"))
+print(settings.as_dict())
 ```
+
+Merge order is explicit:
+
+- defaults
+- later files in `files=[...]`
+- `secrets=...`
+- environment variables like `MYAPP_DATABASE__HOST=localhost`
+- runtime overrides from `override(...)` or `apply_overrides(...)`
+
+Environment parsing is conservative by design:
+
+- `true` and `false` become booleans
+- integers and floats are parsed when unambiguous
+- JSON arrays and objects such as `[1, 2]` or `{"region": "eu"}` are parsed
+- everything else stays a string
+
+The older `configs.layered("settings", "config/settings.yaml", secrets_dir=...)` form still works for the smaller single-file-plus-secret-directory case.
+
+More detail lives in [docs/layered-config.md](docs/layered-config.md).
 
 ### Cache Directories
 
@@ -571,7 +660,8 @@ Main entry points:
 - `register_file(name, path, ...)`
 - `register_directory(name, path, ...)`
 - `register_config(name, path, ...)`
-- `register_layered_config(name, path, ..., secrets_dir=None)`
+- `register_config(name, path, ..., version=None)`
+- `register_layered_config(name, path=None, ..., files=None, env_prefix=None, secrets=None, secrets_dir=None, version=None)`
 - `register_cache(name, path, ...)`
 - `register_data(name, path, ...)`
 - `register_log(name, path, ...)`
@@ -626,9 +716,22 @@ Useful methods:
 Additional helpers:
 
 - `load()`
+- `load_typed(model=None)`
 - `save(data, atomic=True)`
+- `save_typed(instance, atomic=True)`
+- `get(key_path, default=None)`
+- `require(key_path, default=...)`
+- `migration(from_version=..., to_version=...)`
+- `migrate()`
 - `update(..., lock=False)`
 - `load_base()` on layered configs
+
+Layered configs additionally provide:
+
+- `as_dict()`
+- `reload()`
+- `override(mapping)`
+- `apply_overrides(["key=value"])`
 
 ### CacheResource
 
@@ -738,7 +841,7 @@ app = Coryl(root=".")
 
 settings = app.configs.layered(
     "settings",
-    "config/settings.yaml",
+    files=["config/settings.yaml"],
     readonly=True,
     secrets_dir="/run/secrets",
 )
