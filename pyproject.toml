@@ -23,6 +23,9 @@ urls = { Homepage = "https://www.coryl.net" }
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
+[project.optional-dependencies]
+lock = ["filelock>=3"]
+
 [build-system]
 requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"

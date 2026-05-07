@@ -19,13 +19,19 @@ Coryl gives you one place to declare these resources, keeps them inside a safe r
 - Built-in support for `.json`, `.toml`, `.yaml`, and `.yml`
 - Specialized APIs for `configs`, `caches`, and `assets`
 - Generic file and directory management when you do not need special behavior
-- Manifest loading from JSON, TOML, or YAML
+- Modern manifest loading from JSON, TOML, or YAML
 - Compatibility helpers for older `FileManager`-style code
 
 ## Installation
 
 ```bash
 pip install coryl
+```
+
+Optional file locking support:
+
+```bash
+pip install coryl[lock]
 ```
 
 Python 3.10+ is supported.
@@ -86,6 +92,7 @@ app = Coryl(root="/path/to/project")
 ```
 
 Coryl refuses to register or create managed resources outside that root.
+Registration paths are expected to be relative to `root`, so absolute paths are rejected by default and traversal segments such as `..` are not accepted.
 
 ### Resource Types
 
@@ -242,6 +249,30 @@ print(app.content("data"))
 
 If the file extension is structured, Coryl reads and writes structured data automatically. Otherwise it falls back to plain text, unless you write bytes explicitly.
 
+### Safe Writes
+
+Coryl writes managed files safely by default. Text, bytes, and structured data writes go through an atomic replacement flow: Coryl writes a temporary file in the destination directory, flushes it, and then replaces the target file.
+
+That means existing calls such as `resource.write_text(...)`, `resource.write_json(...)`, and `settings.save(...)` automatically use the safer behavior without changing your code.
+
+### Optional File Locking
+
+If you want serialized access around read-modify-write flows, install the optional locking extra:
+
+```bash
+pip install coryl[lock]
+```
+
+Then use the resource-level context manager:
+
+```python
+with settings.lock():
+    data = settings.load()
+    settings.save(data)
+```
+
+`ConfigResource.update(..., lock=True)` uses the same lock flow for convenient config updates.
+
 ### Explicit File APIs
 
 Every file resource also exposes explicit methods:
@@ -294,34 +325,7 @@ Supported manifest formats:
 - TOML
 - YAML
 
-You can use either the legacy schema or the modern schema.
-
-### Legacy Schema
-
-```json
-{
-  "paths": {
-    "files": {
-      "settings": "config/settings.json"
-    },
-    "directories": {
-      "cache": "runtime/cache"
-    }
-  }
-}
-```
-
-Load it like this:
-
-```python
-app = Coryl(root=".", manifest_path="app.json")
-print(app.settings_file_path)
-print(app.cache_directory_path)
-```
-
-### Modern Schema
-
-The modern schema lets you declare specialized roles.
+Manifests use a single modern schema with a top-level `resources` mapping.
 
 JSON example:
 
@@ -406,7 +410,10 @@ Note: `load_config()` is kept mainly for compatibility with the older design. It
 
 Coryl applies a few important safety rules:
 
-- All registered paths must stay inside the manager root
+- All registration APIs, manifest entries, and `ResourceSpec` definitions resolve paths through the same root-confinement checks
+- Managed paths are normalized before use and must stay inside the manager root
+- Absolute paths are rejected by default, and traversal segments such as `..` are rejected even if they would normalize back inside the root
+- Existing symlinks and junctions are handled conservatively; Coryl rejects managed paths that would escape the allowed root or a directory resource through them
 - Child paths created from managed directories must stay inside those directories
 - Config resources must be structured files
 - Cache and asset resources must be directories
@@ -449,18 +456,19 @@ Useful methods:
 
 - `ensure()`
 - `exists()`
+- `lock(timeout=None)`
 - `read_text()`
-- `write_text(text)`
+- `write_text(text, atomic=True)`
 - `read_bytes()`
-- `write_bytes(data)`
+- `write_bytes(data, atomic=True)`
 - `read_data()`
-- `write_data(data)`
+- `write_data(data, atomic=True)`
 - `read_json()`
-- `write_json(data)`
+- `write_json(data, atomic=True)`
 - `read_toml()`
-- `write_toml(data)`
+- `write_toml(data, atomic=True)`
 - `read_yaml()`
-- `write_yaml(data)`
+- `write_yaml(data, atomic=True)`
 - `content()`
 - `write(value)`
 
@@ -469,8 +477,8 @@ Useful methods:
 Additional helpers:
 
 - `load()`
-- `save(data)`
-- `update(...)`
+- `save(data, atomic=True)`
+- `update(..., lock=False)`
 
 ### CacheResource
 

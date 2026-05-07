@@ -1,12 +1,20 @@
 """Coryl public package API."""
 
 from .exceptions import (
-    UnsupportedFormatError,
     CorylError,
+    CorylInvalidResourceKindError,
+    CorylLockTimeoutError,
+    CorylOptionalDependencyError,
+    CorylPathError,
+    CorylResourceNotFoundError,
+    CorylUnsafePathError,
+    CorylUnsupportedFormatError,
+    CorylValidationError,
     ManifestFormatError,
     ResourceConflictError,
     ResourceKindError,
     ResourceNotRegisteredError,
+    UnsupportedFormatError,
     UnsafePathError,
 )
 from .manager import AssetNamespace, CacheNamespace, ConfigNamespace, Coryl, ResourceManager
@@ -29,6 +37,14 @@ __all__ = [
     "ConfigResource",
     "Coryl",
     "CorylError",
+    "CorylInvalidResourceKindError",
+    "CorylLockTimeoutError",
+    "CorylOptionalDependencyError",
+    "CorylPathError",
+    "CorylResourceNotFoundError",
+    "CorylUnsafePathError",
+    "CorylUnsupportedFormatError",
+    "CorylValidationError",
     "ManifestFormatError",
     "Resource",
     "ResourceConflictError",

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import date, datetime, time
 from math import isfinite
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 try:
     import tomllib
@@ -38,7 +38,7 @@ def supports_structured_data(path: str | Path) -> bool:
     return structured_format_for_path(path) is not None
 
 
-def load_from_path(path: str | Path, text: str) -> Any:
+def load_from_path(path: str | Path, text: str) -> object:
     format_name = structured_format_for_path(path)
     if format_name is None:
         raise UnsupportedFormatError(
@@ -48,7 +48,7 @@ def load_from_path(path: str | Path, text: str) -> Any:
     return loads(text, format_name)
 
 
-def dump_to_path(path: str | Path, content: Any) -> str:
+def dump_to_path(path: str | Path, content: object) -> str:
     format_name = structured_format_for_path(path)
     if format_name is None:
         raise UnsupportedFormatError(
@@ -58,7 +58,7 @@ def dump_to_path(path: str | Path, content: Any) -> str:
     return dumps(content, format_name)
 
 
-def loads(text: str, format_name: StructuredFormat) -> Any:
+def loads(text: str, format_name: StructuredFormat) -> object:
     if not text.strip():
         return {}
 
@@ -73,7 +73,7 @@ def loads(text: str, format_name: StructuredFormat) -> Any:
     raise UnsupportedFormatError(f"Unsupported structured format: {format_name!r}.")
 
 
-def dumps(content: Any, format_name: StructuredFormat) -> str:
+def dumps(content: object, format_name: StructuredFormat) -> str:
     if format_name == "json":
         return json.dumps(content, indent=4, ensure_ascii=False) + "\n"
     if format_name == "toml":
@@ -88,7 +88,7 @@ def dumps(content: Any, format_name: StructuredFormat) -> str:
     raise UnsupportedFormatError(f"Unsupported structured format: {format_name!r}.")
 
 
-def dumps_toml(content: Any) -> str:
+def dumps_toml(content: object) -> str:
     if not isinstance(content, Mapping):
         raise TypeError("TOML documents must be mappings at the top level.")
 
@@ -96,15 +96,15 @@ def dumps_toml(content: Any) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_toml_table(table: Mapping[str, Any], prefix: tuple[str, ...]) -> list[str]:
+def _render_toml_table(table: Mapping[str, object], prefix: tuple[str, ...]) -> list[str]:
     lines: list[str] = []
     if prefix:
         dotted_key = ".".join(_format_toml_key(part) for part in prefix)
         lines.append(f"[{dotted_key}]")
 
-    scalar_items: list[tuple[str, Any]] = []
-    child_tables: list[tuple[str, Mapping[str, Any]]] = []
-    array_tables: list[tuple[str, list[Mapping[str, Any]]]] = []
+    scalar_items: list[tuple[str, object]] = []
+    child_tables: list[tuple[str, Mapping[str, object]]] = []
+    array_tables: list[tuple[str, list[Mapping[str, object]]]] = []
 
     for raw_key, value in table.items():
         key = str(raw_key)
@@ -134,11 +134,11 @@ def _render_toml_table(table: Mapping[str, Any], prefix: tuple[str, ...]) -> lis
     return lines
 
 
-def _render_toml_body(table: Mapping[str, Any], prefix: tuple[str, ...]) -> list[str]:
+def _render_toml_body(table: Mapping[str, object], prefix: tuple[str, ...]) -> list[str]:
     lines: list[str] = []
-    scalar_items: list[tuple[str, Any]] = []
-    child_tables: list[tuple[str, Mapping[str, Any]]] = []
-    array_tables: list[tuple[str, list[Mapping[str, Any]]]] = []
+    scalar_items: list[tuple[str, object]] = []
+    child_tables: list[tuple[str, Mapping[str, object]]] = []
+    array_tables: list[tuple[str, list[Mapping[str, object]]]] = []
 
     for raw_key, value in table.items():
         key = str(raw_key)
@@ -174,7 +174,7 @@ def _format_toml_key(key: str) -> str:
     return json.dumps(key, ensure_ascii=False)
 
 
-def _format_toml_value(value: Any) -> str:
+def _format_toml_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -204,5 +204,5 @@ def _format_toml_value(value: Any) -> str:
     raise TypeError(f"Unsupported TOML value type: {type(value).__name__}.")
 
 
-def _is_array_of_tables(value: Any) -> bool:
+def _is_array_of_tables(value: object) -> bool:
     return isinstance(value, list) and bool(value) and all(isinstance(item, Mapping) for item in value)

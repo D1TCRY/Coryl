@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Generic, TypeVar
 
+from ._paths import is_within_root, resolve_managed_path
 from .exceptions import (
     ManifestFormatError,
     ResourceConflictError,
     ResourceKindError,
     ResourceNotRegisteredError,
-    UnsafePathError,
 )
 from .resources import (
     MISSING,
@@ -24,10 +25,11 @@ from .resources import (
 )
 from .serialization import load_from_path
 
-ResourceInput = str | Path | ResourceSpec | Mapping[str, Any]
+ResourceInput = str | Path | ResourceSpec | Mapping[str, object]
+TResource = TypeVar("TResource", bound=Resource)
 
 
-class _NamespaceBase:
+class _NamespaceBase(Generic[TResource]):
     """Common helpers for typed resource namespaces."""
 
     def __init__(self, manager: "ResourceManager") -> None:
@@ -40,20 +42,20 @@ class _NamespaceBase:
             return False
         return True
 
-    def __getitem__(self, name: str):
+    def __getitem__(self, name: str) -> TResource:
         return self.get(name)
 
     def names(self) -> list[str]:
         raise NotImplementedError
 
-    def all(self) -> dict[str, Resource]:
+    def all(self) -> dict[str, TResource]:
         raise NotImplementedError
 
-    def get(self, name: str):
+    def get(self, name: str) -> TResource:
         raise NotImplementedError
 
 
-class ConfigNamespace(_NamespaceBase):
+class ConfigNamespace(_NamespaceBase[ConfigResource]):
     """Register and retrieve config resources."""
 
     def add(
@@ -87,7 +89,7 @@ class ConfigNamespace(_NamespaceBase):
         return list(self.all())
 
 
-class CacheNamespace(_NamespaceBase):
+class CacheNamespace(_NamespaceBase[CacheResource]):
     """Register and retrieve cache directories."""
 
     def add(
@@ -119,7 +121,7 @@ class CacheNamespace(_NamespaceBase):
         return list(self.all())
 
 
-class AssetNamespace(_NamespaceBase):
+class AssetNamespace(_NamespaceBase[AssetGroup]):
     """Register and retrieve asset directories."""
 
     def add(
@@ -164,7 +166,7 @@ class ResourceManager:
     ) -> None:
         self._root_path = Path(root).resolve(strict=False)
         self._manifest_path: Path | None = None
-        self._manifest_data: dict[str, Any] | None = None
+        self._manifest_data: dict[str, object] | None = None
         self._manifest_resource_names: set[str] = set()
         self._create_missing = create_missing
         self._resources: dict[str, Resource] = {}
@@ -211,9 +213,7 @@ class ResourceManager:
 
     @staticmethod
     def is_child_of(child: str | Path, parent: str | Path) -> bool:
-        child_path = Path(child).resolve(strict=False)
-        parent_path = Path(parent).resolve(strict=False)
-        return child_path == parent_path or parent_path in child_path.parents
+        return is_within_root(child, parent)
 
     @property
     def root_path(self) -> Path:
@@ -237,11 +237,11 @@ class ResourceManager:
         raise AttributeError("No manifest_path has been configured.")
 
     @property
-    def manifest(self) -> dict[str, Any] | None:
+    def manifest(self) -> dict[str, object] | None:
         return self._manifest_data
 
     @property
-    def config(self) -> dict[str, Any]:
+    def config(self) -> dict[str, object]:
         if self._manifest_data is None:
             raise AttributeError("No manifest has been loaded.")
         return self._manifest_data
@@ -274,8 +274,11 @@ class ResourceManager:
     def paths(self) -> list[Path]:
         return self.file_paths + self.directory_paths
 
-    def load_manifest(self, manifest_path: str | Path) -> dict[str, Any]:
-        resolved_manifest_path = self._resolve_from_root(manifest_path)
+    def load_manifest(self, manifest_path: str | Path) -> dict[str, object]:
+        resolved_manifest_path = self._resolve_from_root(
+            manifest_path,
+            allow_absolute=True,
+        )
         self._manifest_path = resolved_manifest_path
 
         raw_content = resolved_manifest_path.read_text(encoding="utf-8")
@@ -300,7 +303,7 @@ class ResourceManager:
         self._manifest_resource_names = set(parsed_resources)
         return self._manifest_data
 
-    def load_config(self) -> dict[str, Any]:
+    def load_config(self) -> dict[str, object]:
         if self._manifest_path is None or self._manifest_data is None:
             raise AttributeError("No manifest has been loaded.")
         return self.load_manifest(self._manifest_path)
@@ -466,10 +469,10 @@ class ResourceManager:
     def path(self, name: str) -> Path:
         return self.resource(name).path
 
-    def content(self, name: str, default: Any = MISSING) -> Any:
+    def content(self, name: str, default: object = MISSING) -> object:
         return self.resource(name).content(default=default)
 
-    def write_content(self, name: str, content: Any) -> Path:
+    def write_content(self, name: str, content: object) -> Path:
         return self.file(name).write(content)
 
     def ensure(self, name: str) -> Path:
@@ -478,13 +481,18 @@ class ResourceManager:
     def resolve(self, *parts: str | Path) -> Path:
         return self._resolve_from_root(Path(*parts))
 
-    def _resolve_from_root(self, relative_path: str | Path) -> Path:
-        candidate = (self.root_path / Path(relative_path)).resolve(strict=False)
-        if not self.is_child_of(candidate, self.root_path):
-            raise UnsafePathError(
-                f"Path '{candidate}' escapes the root folder '{self.root_path}'."
-            )
-        return candidate
+    def _resolve_from_root(
+        self,
+        relative_path: str | Path,
+        *,
+        allow_absolute: bool = False,
+    ) -> Path:
+        return resolve_managed_path(
+            relative_path,
+            base_path=self.root_path,
+            allowed_root=self.root_path,
+            allow_absolute=allow_absolute,
+        )
 
     def _coerce_resource_spec(self, definition: ResourceInput) -> ResourceSpec:
         if isinstance(definition, ResourceSpec):
@@ -499,6 +507,9 @@ class ResourceManager:
             except KeyError as error:
                 raise ManifestFormatError("Resource mapping must contain a 'path' key.") from error
 
+            if not isinstance(path_value, (str, Path)):
+                raise ManifestFormatError("Resource mapping 'path' must be a string or Path.")
+
             kind = definition.get("kind")
             create = definition.get("create", self._create_missing)
             encoding = definition.get("encoding", "utf-8")
@@ -510,7 +521,7 @@ class ResourceManager:
                 kind=kind,
                 create=bool(create),
                 encoding=str(encoding),
-                role=role,
+                role=str(role),
             )
 
         raise TypeError(
@@ -528,45 +539,16 @@ class ResourceManager:
     def _infer_kind(path_value: str | Path) -> ResourceKind:
         return "file" if Path(path_value).suffix else "directory"
 
-    def _parse_manifest(self, manifest_data: Mapping[str, Any]) -> dict[str, ResourceSpec]:
-        parsed: dict[str, ResourceSpec] = {}
-
+    def _parse_manifest(self, manifest_data: Mapping[str, object]) -> dict[str, ResourceSpec]:
         resources_section = manifest_data.get("resources")
-        if resources_section is not None:
-            if not isinstance(resources_section, Mapping):
-                raise ManifestFormatError("'resources' must be a mapping.")
-            for name, definition in resources_section.items():
-                parsed[str(name)] = self._coerce_resource_spec(definition)
+        if resources_section is None:
+            raise ManifestFormatError("Manifest must contain a top-level 'resources' mapping.")
+        if not isinstance(resources_section, Mapping):
+            raise ManifestFormatError("'resources' must be a mapping.")
 
-        paths_section = manifest_data.get("paths")
-        if paths_section is not None:
-            if not isinstance(paths_section, Mapping):
-                raise ManifestFormatError("'paths' must be a mapping.")
-
-            files_section = paths_section.get("files", {})
-            directories_section = paths_section.get("directories", {})
-
-            if not isinstance(files_section, Mapping):
-                raise ManifestFormatError("'paths.files' must be a mapping.")
-            if not isinstance(directories_section, Mapping):
-                raise ManifestFormatError("'paths.directories' must be a mapping.")
-
-            for name, relative_path in files_section.items():
-                parsed[str(name)] = ResourceSpec.file(
-                    relative_path,
-                    create=self._create_missing,
-                )
-            for name, relative_path in directories_section.items():
-                parsed[str(name)] = ResourceSpec.directory(
-                    relative_path,
-                    create=self._create_missing,
-                )
-
-        if not parsed:
-            raise ManifestFormatError(
-                "Manifest must contain either 'resources' or 'paths'."
-            )
-
+        parsed: dict[str, ResourceSpec] = {}
+        for name, definition in resources_section.items():
+            parsed[str(name)] = self._coerce_resource_spec(definition)
         return parsed
 
 

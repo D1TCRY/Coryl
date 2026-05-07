@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal, Mapping
+from typing import IO, Literal
 
-from .exceptions import ResourceKindError, UnsafePathError, UnsupportedFormatError
+from ._io import _atomic_write_bytes, _atomic_write_text
+from ._locks import managed_lock
+from ._paths import is_within_root, resolve_managed_path, validate_managed_path_input
+from .exceptions import (
+    CorylValidationError,
+    ResourceKindError,
+    UnsafePathError,
+    UnsupportedFormatError,
+)
 from .serialization import dump_to_path, load_from_path, structured_format_for_path
 
 ResourceKind = Literal["file", "directory"]
@@ -26,17 +36,15 @@ class ResourceSpec:
     role: ResourceRole = "resource"
 
     def __post_init__(self) -> None:
-        relative_path = Path(self.relative_path)
-        if relative_path.is_absolute():
-            raise ValueError("ResourceSpec.relative_path must be relative to the manager root.")
+        relative_path = validate_managed_path_input(self.relative_path)
         if self.kind not in {"file", "directory"}:
-            raise ValueError("ResourceSpec.kind must be either 'file' or 'directory'.")
+            raise ResourceKindError("ResourceSpec.kind must be either 'file' or 'directory'.")
         if self.role not in {"resource", "config", "cache", "assets"}:
-            raise ValueError("ResourceSpec.role is invalid.")
+            raise CorylValidationError("ResourceSpec.role is invalid.")
         if self.role == "config" and self.kind != "file":
-            raise ValueError("Config resources must be files.")
+            raise CorylValidationError("Config resources must be files.")
         if self.role in {"cache", "assets"} and self.kind != "directory":
-            raise ValueError("Cache and asset resources must be directories.")
+            raise CorylValidationError("Cache and asset resources must be directories.")
         object.__setattr__(self, "relative_path", relative_path)
 
     @classmethod
@@ -132,13 +140,13 @@ class Resource:
     def __post_init__(self) -> None:
         self.path = self.path.resolve(strict=False)
         if self.kind not in {"file", "directory"}:
-            raise ValueError("Resource.kind must be either 'file' or 'directory'.")
+            raise ResourceKindError("Resource.kind must be either 'file' or 'directory'.")
         if self.role not in {"resource", "config", "cache", "assets"}:
-            raise ValueError("Resource.role is invalid.")
+            raise CorylValidationError("Resource.role is invalid.")
         if self.role == "config" and self.kind != "file":
-            raise ValueError("Config resources must be files.")
+            raise CorylValidationError("Config resources must be files.")
         if self.role in {"cache", "assets"} and self.kind != "directory":
-            raise ValueError("Cache and asset resources must be directories.")
+            raise CorylValidationError("Cache and asset resources must be directories.")
         if self.create:
             self.ensure()
 
@@ -170,7 +178,7 @@ class Resource:
     def is_dir(self) -> bool:
         return self.path.is_dir()
 
-    def open(self, *args: Any, **kwargs: Any):
+    def open(self, *args: object, **kwargs: object) -> IO[str] | IO[bytes]:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
         return self.path.open(*args, **kwargs)
@@ -180,11 +188,22 @@ class Resource:
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
         return self.path.read_text(encoding=encoding or self.encoding)
 
-    def write_text(self, content: str, *, encoding: str | None = None) -> Path:
+    def write_text(
+        self,
+        content: str,
+        *,
+        encoding: str | None = None,
+        atomic: bool = True,
+    ) -> Path:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
-        self.ensure()
-        self.path.write_text(content, encoding=encoding or self.encoding)
+
+        actual_encoding = encoding or self.encoding
+        if atomic:
+            return _atomic_write_text(self.path, content, encoding=actual_encoding)
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(content, encoding=actual_encoding)
         return self.path
 
     def read_bytes(self) -> bytes:
@@ -192,38 +211,81 @@ class Resource:
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
         return self.path.read_bytes()
 
-    def write_bytes(self, content: bytes) -> Path:
+    def write_bytes(self, content: bytes, *, atomic: bool = True) -> Path:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
-        self.ensure()
+
+        if atomic:
+            return _atomic_write_bytes(self.path, content)
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_bytes(content)
         return self.path
 
-    def read_data(self, *, default: Any = MISSING, encoding: str | None = None) -> Any:
+    def read_data(self, *, default: object = MISSING, encoding: str | None = None) -> object:
         return self._read_structured(default=default, encoding=encoding)
 
-    def write_data(self, content: Any, *, encoding: str | None = None) -> Path:
-        return self._write_structured(content, encoding=encoding)
+    def write_data(
+        self,
+        content: object,
+        *,
+        encoding: str | None = None,
+        atomic: bool = True,
+    ) -> Path:
+        return self._write_structured(content, encoding=encoding, atomic=atomic)
 
-    def read_json(self, *, default: Any = MISSING, encoding: str | None = None) -> Any:
+    def read_json(self, *, default: object = MISSING, encoding: str | None = None) -> object:
         return self._read_structured(default=default, expected_format="json", encoding=encoding)
 
-    def write_json(self, content: Any, *, encoding: str | None = None) -> Path:
-        return self._write_structured(content, expected_format="json", encoding=encoding)
+    def write_json(
+        self,
+        content: object,
+        *,
+        encoding: str | None = None,
+        atomic: bool = True,
+    ) -> Path:
+        return self._write_structured(
+            content,
+            expected_format="json",
+            encoding=encoding,
+            atomic=atomic,
+        )
 
-    def read_toml(self, *, default: Any = MISSING, encoding: str | None = None) -> Any:
+    def read_toml(self, *, default: object = MISSING, encoding: str | None = None) -> object:
         return self._read_structured(default=default, expected_format="toml", encoding=encoding)
 
-    def write_toml(self, content: Any, *, encoding: str | None = None) -> Path:
-        return self._write_structured(content, expected_format="toml", encoding=encoding)
+    def write_toml(
+        self,
+        content: object,
+        *,
+        encoding: str | None = None,
+        atomic: bool = True,
+    ) -> Path:
+        return self._write_structured(
+            content,
+            expected_format="toml",
+            encoding=encoding,
+            atomic=atomic,
+        )
 
-    def read_yaml(self, *, default: Any = MISSING, encoding: str | None = None) -> Any:
+    def read_yaml(self, *, default: object = MISSING, encoding: str | None = None) -> object:
         return self._read_structured(default=default, expected_format="yaml", encoding=encoding)
 
-    def write_yaml(self, content: Any, *, encoding: str | None = None) -> Path:
-        return self._write_structured(content, expected_format="yaml", encoding=encoding)
+    def write_yaml(
+        self,
+        content: object,
+        *,
+        encoding: str | None = None,
+        atomic: bool = True,
+    ) -> Path:
+        return self._write_structured(
+            content,
+            expected_format="yaml",
+            encoding=encoding,
+            atomic=atomic,
+        )
 
-    def content(self, *, default: Any = MISSING) -> Any:
+    def content(self, *, default: object = MISSING) -> object:
         try:
             return self._auto_read()
         except Exception:
@@ -231,7 +293,7 @@ class Resource:
                 return default
             raise
 
-    def write(self, content: Any) -> Path:
+    def write(self, content: object) -> Path:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
 
@@ -251,8 +313,7 @@ class Resource:
         if self.kind != "directory":
             raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
 
-        candidate = self.path.joinpath(*parts).resolve(strict=False)
-        self._assert_inside(candidate)
+        candidate = self._resolve_child_path(*parts)
 
         inferred_kind: ResourceKind = kind or ("file" if candidate.suffix else "directory")
         child_name = "/".join([self.name, *[str(part) for part in parts]])
@@ -265,7 +326,7 @@ class Resource:
             role=role,
         )
 
-    def iterdir(self) -> Iterable[Path]:
+    def iterdir(self) -> Iterator[Path]:
         if self.kind != "directory":
             raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
         self.ensure()
@@ -277,7 +338,12 @@ class Resource:
         self.ensure()
         return sorted(self.path.glob(pattern))
 
-    def _auto_read(self) -> Any:
+    @contextmanager
+    def lock(self, timeout: float | None = None) -> Iterator["Resource"]:
+        with managed_lock(self.path, timeout=timeout):
+            yield self
+
+    def _auto_read(self) -> object:
         if self.format is not None:
             return self.read_data()
         return self.read_text()
@@ -285,10 +351,10 @@ class Resource:
     def _read_structured(
         self,
         *,
-        default: Any = MISSING,
+        default: object = MISSING,
         expected_format: str | None = None,
         encoding: str | None = None,
-    ) -> Any:
+    ) -> object:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
 
@@ -313,10 +379,11 @@ class Resource:
 
     def _write_structured(
         self,
-        content: Any,
+        content: object,
         *,
         expected_format: str | None = None,
         encoding: str | None = None,
+        atomic: bool = True,
     ) -> Path:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
@@ -333,11 +400,18 @@ class Resource:
             )
 
         payload = dump_to_path(self.path, content)
-        return self.write_text(payload, encoding=encoding)
+        return self.write_text(payload, encoding=encoding, atomic=atomic)
 
     def _assert_inside(self, candidate: Path) -> None:
-        if candidate != self.path and self.path not in candidate.parents:
+        if not is_within_root(candidate, self.path):
             raise UnsafePathError("Joined path escapes the directory resource root.")
+
+    def _resolve_child_path(self, *parts: str | Path) -> Path:
+        return resolve_managed_path(
+            Path(*parts),
+            base_path=self.path,
+            allowed_root=self.path,
+        )
 
 
 class ConfigResource(Resource):
@@ -350,23 +424,34 @@ class ConfigResource(Resource):
                 "Config resources must use one of: .json, .toml, .yaml, .yml."
             )
 
-    def load(self, *, default: Any = MISSING) -> Any:
+    def load(self, *, default: object = MISSING) -> object:
         return self.read_data(default=default)
 
-    def save(self, content: Any) -> Path:
-        return self.write_data(content)
+    def save(self, content: object, *, atomic: bool = True) -> Path:
+        return self.write_data(content, atomic=atomic)
 
-    def update(self, *mappings: Mapping[str, Any], **changes: Any) -> dict[str, Any]:
-        current = self.load(default={})
-        if not isinstance(current, Mapping):
-            raise TypeError("ConfigResource.update() requires a mapping-based document.")
+    def update(
+        self,
+        *mappings: Mapping[str, object],
+        lock: bool = False,
+        **changes: object,
+    ) -> dict[str, object]:
+        def apply_update() -> dict[str, object]:
+            current = self.load(default={})
+            if not isinstance(current, Mapping):
+                raise TypeError("ConfigResource.update() requires a mapping-based document.")
 
-        merged = dict(current)
-        for mapping in mappings:
-            merged.update(mapping)
-        merged.update(changes)
-        self.save(merged)
-        return merged
+            merged = dict(current)
+            for mapping in mappings:
+                merged.update(mapping)
+            merged.update(changes)
+            self.save(merged)
+            return merged
+
+        if lock:
+            with self.lock():
+                return apply_update()
+        return apply_update()
 
 
 class CacheResource(Resource):
@@ -389,15 +474,14 @@ class CacheResource(Resource):
             raise TypeError("Cache directory creation returned the wrong resource type.")
         return resource
 
-    def remember(self, *parts: str | Path, content: Any) -> Path:
+    def remember(self, *parts: str | Path, content: object) -> Path:
         return self.file(*parts, create=True).write(content)
 
-    def load(self, *parts: str | Path, default: Any = MISSING) -> Any:
+    def load(self, *parts: str | Path, default: object = MISSING) -> object:
         return self.file(*parts).content(default=default)
 
     def delete(self, *parts: str | Path, missing_ok: bool = True) -> None:
-        target = self.path.joinpath(*parts).resolve(strict=False)
-        self._assert_inside(target)
+        target = self._resolve_child_path(*parts)
 
         if not target.exists():
             if missing_ok:
@@ -412,6 +496,7 @@ class CacheResource(Resource):
     def clear(self) -> None:
         self.ensure()
         for child in list(self.path.iterdir()):
+            self._assert_inside(child.resolve(strict=False))
             if child.is_dir():
                 shutil.rmtree(child)
             else:

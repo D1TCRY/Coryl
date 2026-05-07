@@ -1,28 +1,45 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from coryl import (
     AssetGroup,
     CacheResource,
     ConfigResource,
     Coryl,
+    CorylInvalidResourceKindError,
+    CorylLockTimeoutError,
+    CorylOptionalDependencyError,
+    CorylPathError,
+    CorylUnsupportedFormatError,
+    CorylUnsafePathError,
+    CorylValidationError,
+    ManifestFormatError,
     ResourceKindError,
     ResourceNotRegisteredError,
     ResourceSpec,
-    UnsafePathError,
 )
 
 
 class CorylTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.outside_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
+        self.outside_root = Path(self.outside_dir.name)
+        self._directory_links: list[Path] = []
 
     def tearDown(self) -> None:
+        for link_path in reversed(self._directory_links):
+            self._remove_directory_link(link_path)
+        self.outside_dir.cleanup()
         self.temp_dir.cleanup()
 
     def test_registers_files_and_directories(self) -> None:
@@ -39,6 +56,63 @@ class CorylTests(unittest.TestCase):
         self.assertEqual(manager.root_folder_path, self.root.resolve())
         self.assertEqual(manager.config_file_path, manager.path("config"))
 
+    def test_registration_methods_keep_paths_inside_root(self) -> None:
+        manager = Coryl(self.root)
+
+        resources = {
+            "notes": manager.register_file("notes", "data/notes.txt"),
+            "exports": manager.register_directory("exports", "build/exports"),
+            "settings": manager.register_config("settings", "config/settings.toml"),
+            "cache": manager.register_cache("cache", ".cache/http"),
+            "assets": manager.register_assets("assets", "assets/ui"),
+            "logs": manager.register("logs", ResourceSpec.file("runtime/logs.json")),
+        }
+
+        self.assertIsInstance(resources["settings"], ConfigResource)
+        self.assertIsInstance(resources["cache"], CacheResource)
+        self.assertIsInstance(resources["assets"], AssetGroup)
+
+        for name, resource in resources.items():
+            with self.subTest(resource=name):
+                self.assertTrue(resource.path.is_relative_to(manager.root_path))
+
+    def test_registration_methods_reject_traversal(self) -> None:
+        manager = Coryl(self.root)
+        cases = {
+            "register_file": lambda: manager.register_file("notes", "data/../notes.txt"),
+            "register_directory": lambda: manager.register_directory(
+                "exports", "build/../exports"
+            ),
+            "register_config": lambda: manager.register_config(
+                "settings", "config/../settings.toml"
+            ),
+            "register_cache": lambda: manager.register_cache("cache", ".cache/../http"),
+            "register_assets": lambda: manager.register_assets("assets", "assets/../ui"),
+            "resource_spec": lambda: manager.register(
+                "logs",
+                ResourceSpec.file("runtime/../logs.json"),
+            ),
+        }
+
+        for label, action in cases.items():
+            with self.subTest(method=label):
+                with self.assertRaises(CorylUnsafePathError):
+                    action()
+
+    def test_manager_rejects_absolute_paths_by_default(self) -> None:
+        manager = Coryl(self.root)
+
+        with self.assertRaises(CorylPathError):
+            manager.register_file("absolute", self.root / "data" / "absolute.txt")
+
+    def test_rejects_directory_links_that_escape_the_root(self) -> None:
+        manager = Coryl(self.root)
+        link_path = self.root / "linked-assets"
+        self._make_directory_link(link_path, self.outside_root)
+
+        with self.assertRaises(CorylUnsafePathError):
+            manager.register_directory("linked", "linked-assets")
+
     def test_json_round_trip_and_legacy_aliases(self) -> None:
         manager = Coryl(self.root)
         manager.register_file("data", "storage/data.json")
@@ -49,6 +123,79 @@ class CorylTests(unittest.TestCase):
         self.assertEqual(manager.data_file_path.name, "data.json")
         with self.assertRaises(AttributeError):
             _ = manager.data_directory_path
+
+    def test_write_text_uses_atomic_replacement_by_default(self) -> None:
+        manager = Coryl(self.root)
+        report = manager.register_file("report", "reports/daily.txt")
+
+        report.write_text("daily summary")
+
+        self.assertEqual(report.read_text(), "daily summary")
+        self.assertEqual(self._temporary_files_for(report.path), [])
+
+    def test_write_bytes_uses_atomic_replacement_by_default(self) -> None:
+        manager = Coryl(self.root)
+        archive = manager.register_file("archive", "data/archive.bin")
+
+        archive.write_bytes(b"\x00\x01\x02")
+
+        self.assertEqual(archive.read_bytes(), b"\x00\x01\x02")
+        self.assertEqual(self._temporary_files_for(archive.path), [])
+
+    def test_lock_context_manager_creates_and_uses_lock_file(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.register_file("settings", "config/settings.json")
+        file_lock_class, timeout_error = self._make_fake_lock_backend()
+        expected_lock_path = settings.path.parent / f"{settings.path.name}.lock"
+
+        with mock.patch(
+            "coryl._locks._load_filelock_backend",
+            return_value=(file_lock_class, timeout_error),
+        ):
+            with settings.lock() as locked_resource:
+                self.assertIs(locked_resource, settings)
+                self.assertEqual(file_lock_class.created_paths, [expected_lock_path])
+                self.assertEqual(file_lock_class.requested_timeouts, [None])
+                self.assertTrue(expected_lock_path.exists())
+
+    def test_lock_dependency_missing_error_is_clear(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.register_file("settings", "config/settings.json")
+
+        with mock.patch(
+            "coryl._locks.import_module",
+            side_effect=ModuleNotFoundError("No module named 'filelock'"),
+        ):
+            with self.assertRaises(CorylOptionalDependencyError) as caught:
+                with settings.lock():
+                    pass
+
+        self.assertIn("pip install coryl[lock]", str(caught.exception))
+
+    def test_explicit_structured_write_helpers_still_work(self) -> None:
+        manager = Coryl(self.root)
+        payload = {"name": "Coryl", "version": 1}
+
+        json_resource = manager.register_file("json", "storage/data.json")
+        toml_resource = manager.register_file("toml", "storage/data.toml")
+        yaml_resource = manager.register_file("yaml", "storage/data.yaml")
+
+        json_resource.write_json(payload)
+        toml_resource.write_toml(payload)
+        yaml_resource.write_yaml(payload)
+
+        self.assertEqual(json_resource.read_json(), payload)
+        self.assertEqual(toml_resource.read_toml(), payload)
+        self.assertEqual(yaml_resource.read_yaml(), payload)
+
+    def test_config_save_still_uses_safe_structured_writes(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.yaml")
+
+        settings.save({"theme": "dark", "language": "en"})
+
+        self.assertEqual(settings.load(), {"theme": "dark", "language": "en"})
+        self.assertEqual(self._temporary_files_for(settings.path), [])
 
     def test_toml_config_round_trip(self) -> None:
         manager = Coryl(self.root)
@@ -88,7 +235,87 @@ class CorylTests(unittest.TestCase):
         )
         self.assertEqual(settings.load()["timezone"], "Europe/Rome")
 
-    def test_legacy_manifest_schema_is_supported(self) -> None:
+    def test_config_update_with_lock_true_works(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.yaml")
+        file_lock_class, timeout_error = self._make_fake_lock_backend()
+        settings.save({"theme": "light", "language": "en"})
+
+        with mock.patch(
+            "coryl._locks._load_filelock_backend",
+            return_value=(file_lock_class, timeout_error),
+        ):
+            merged = settings.update(language="it", lock=True)
+
+        self.assertEqual(merged, {"theme": "light", "language": "it"})
+        self.assertEqual(settings.load(), {"theme": "light", "language": "it"})
+        self.assertEqual(file_lock_class.requested_timeouts, [None])
+
+    def test_lock_timeout_maps_to_coryl_lock_timeout_error(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.register_file("settings", "config/settings.json")
+        file_lock_class, timeout_error = self._make_timeout_lock_backend()
+
+        with mock.patch(
+            "coryl._locks._load_filelock_backend",
+            return_value=(file_lock_class, timeout_error),
+        ):
+            with self.assertRaises(CorylLockTimeoutError) as caught:
+                with settings.lock(timeout=0.01):
+                    pass
+
+        self.assertIn(".lock", str(caught.exception))
+
+    def test_atomic_writes_recreate_missing_parent_directories(self) -> None:
+        manager = Coryl(self.root)
+        report = manager.register_file("report", "runtime/reports/daily.txt")
+
+        shutil.rmtree(self.root / "runtime")
+        report.write_text("restored")
+
+        self.assertTrue(report.path.parent.is_dir())
+        self.assertEqual(report.read_text(), "restored")
+
+    def test_atomic_false_still_writes_text(self) -> None:
+        manager = Coryl(self.root)
+        report = manager.register_file("report", "reports/daily.txt")
+
+        report.write_text("plain write", atomic=False)
+
+        self.assertEqual(report.read_text(), "plain write")
+        self.assertEqual(self._temporary_files_for(report.path), [])
+
+    def test_atomic_write_cleans_up_temp_files_after_failure(self) -> None:
+        manager = Coryl(self.root)
+        report = manager.register_file("report", "reports/daily.txt")
+        report.write_text("original")
+
+        with mock.patch("coryl._io.os.replace", side_effect=OSError("replace failed")):
+            with self.assertRaises(OSError):
+                report.write_text("updated")
+
+        self.assertEqual(report.read_text(), "original")
+        self.assertEqual(self._temporary_files_for(report.path), [])
+
+    def test_config_resources_must_use_structured_files(self) -> None:
+        manager = Coryl(self.root)
+
+        with self.assertRaises(CorylUnsupportedFormatError):
+            manager.register_config("settings", "config/settings.txt")
+
+    def test_cache_and_assets_must_be_directories(self) -> None:
+        manager = Coryl(self.root)
+        cases = {
+            "cache": {"path": "runtime/cache.txt", "kind": "file", "role": "cache"},
+            "assets": {"path": "assets/logo.svg", "kind": "file", "role": "assets"},
+        }
+
+        for name, definition in cases.items():
+            with self.subTest(role=name):
+                with self.assertRaises(CorylValidationError):
+                    manager.register(name, definition)
+
+    def test_legacy_manifest_schema_is_rejected(self) -> None:
         manifest_path = self.root / "app.json"
         manifest_path.write_text(
             json.dumps(
@@ -102,11 +329,24 @@ class CorylTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        manager = Coryl(self.root, manifest_path="app.json")
+        with self.assertRaises(ManifestFormatError):
+            Coryl(self.root, manifest_path="app.json")
 
-        self.assertTrue(manager.settings_file_path.is_file())
-        self.assertTrue(manager.cache_directory_path.is_dir())
-        self.assertIn("paths", manager.config)
+    def test_manifest_loading_uses_the_same_safe_resolver(self) -> None:
+        manifest_path = self.root / "app.yaml"
+        manifest_path.write_text(
+            """
+resources:
+  settings:
+    path: config/../settings.yaml
+    kind: file
+    role: config
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(CorylUnsafePathError):
+            Coryl(self.root, manifest_path="app.yaml")
 
     def test_toml_manifest_with_specialized_roles(self) -> None:
         manifest_path = self.root / "app.toml"
@@ -202,22 +442,40 @@ resources:
         self.assertTrue(assets.require("icons", kind="directory").path.is_dir())
         self.assertEqual(len(assets.files("**/*.svg")), 2)
 
-    def test_prevents_escaping_the_root_folder(self) -> None:
-        manager = Coryl(self.root)
-        with self.assertRaises(UnsafePathError):
-            manager.register_file("secrets", "../secrets.json")
-
-    def test_directory_helpers_stay_safe(self) -> None:
+    def test_child_paths_cannot_escape_parent(self) -> None:
         manager = Coryl(
             self.root,
             resources={"assets": ResourceSpec.assets("assets")},
         )
+        assets = manager.assets.get("assets")
+        image = assets.file("images", "logo.png", create=True)
 
-        image = manager.assets.get("assets").file("images", "logo.png", create=True)
         self.assertTrue(image.path.is_file())
 
-        with self.assertRaises(UnsafePathError):
-            manager.assets.get("assets").file("..", "escape.txt")
+        with self.assertRaises(CorylUnsafePathError):
+            assets.file("images", "..", "escape.txt")
+
+    def test_child_helpers_reject_absolute_paths(self) -> None:
+        manager = Coryl(self.root)
+        assets = manager.assets.add("ui", "assets")
+
+        with self.assertRaises(CorylPathError):
+            assets.file(self.root / "assets" / "logo.svg")
+
+    def test_child_helpers_reject_directory_links_that_escape_parent(self) -> None:
+        manager = Coryl(self.root)
+        assets = manager.assets.add("ui", "assets")
+        link_path = assets.path / "linked"
+        self._make_directory_link(link_path, self.outside_root)
+
+        with self.assertRaises(CorylUnsafePathError):
+            assets.file("linked", "secret.txt")
+
+    def test_rejects_invalid_kind(self) -> None:
+        manager = Coryl(self.root)
+
+        with self.assertRaises(CorylInvalidResourceKindError):
+            manager.register("invalid", {"path": "runtime/item", "kind": "socket"})
 
     def test_resource_validation_errors_are_explicit(self) -> None:
         manager = Coryl(self.root, resources={"assets": ResourceSpec.directory("assets")})
@@ -230,6 +488,89 @@ resources:
 
         with self.assertRaises(ResourceKindError):
             manager.configs.get("assets")
+
+    def _make_directory_link(self, link_path: Path, target_path: Path) -> None:
+        self._directory_links.append(link_path)
+        if os.name == "nt":
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link_path), str(target_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise unittest.SkipTest(result.stderr.strip() or result.stdout.strip())
+            return
+
+        try:
+            link_path.symlink_to(target_path, target_is_directory=True)
+        except OSError as error:
+            raise unittest.SkipTest(f"Directory symlinks are unavailable: {error}") from error
+
+    def _remove_directory_link(self, link_path: Path) -> None:
+        if not link_path.exists() and not link_path.is_symlink():
+            return
+
+        if os.name == "nt":
+            subprocess.run(
+                ["cmd", "/c", "rmdir", str(link_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return
+
+        link_path.unlink()
+
+    def _temporary_files_for(self, destination: Path) -> list[Path]:
+        prefix = f".{destination.name}."
+        return sorted(
+            candidate
+            for candidate in destination.parent.iterdir()
+            if candidate.name.startswith(prefix) and candidate.name.endswith(".tmp")
+        )
+
+    def _make_fake_lock_backend(self) -> tuple[type[object], type[BaseException]]:
+        class FakeTimeout(Exception):
+            pass
+
+        class FakeAcquire:
+            def __init__(self, lock_path: Path) -> None:
+                self._lock_path = lock_path
+
+            def __enter__(self) -> Path:
+                self._lock_path.write_text("locked", encoding="utf-8")
+                return self._lock_path
+
+            def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+                return False
+
+        class FakeFileLock:
+            created_paths: list[Path] = []
+            requested_timeouts: list[float | None] = []
+
+            def __init__(self, lock_path: str) -> None:
+                self._lock_path = Path(lock_path)
+                type(self).created_paths.append(self._lock_path)
+
+            def acquire(self, timeout: float | None = None) -> FakeAcquire:
+                type(self).requested_timeouts.append(timeout)
+                return FakeAcquire(self._lock_path)
+
+        return FakeFileLock, FakeTimeout
+
+    def _make_timeout_lock_backend(self) -> tuple[type[object], type[BaseException]]:
+        class FakeTimeout(Exception):
+            pass
+
+        class FakeFileLock:
+            def __init__(self, lock_path: str) -> None:
+                self._lock_path = Path(lock_path)
+
+            def acquire(self, timeout: float | None = None) -> object:
+                raise FakeTimeout(f"timeout for {self._lock_path}")
+
+        return FakeFileLock, FakeTimeout
 
 
 if __name__ == "__main__":
