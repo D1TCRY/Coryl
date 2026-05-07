@@ -7,7 +7,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -27,6 +30,8 @@ from coryl import (
     LayeredConfigResource,
     MANIFEST_VERSION,
     ManifestFormatError,
+    PackageAssetGroup,
+    PackageAssetResource,
     ResourceKindError,
     ResourceNotRegisteredError,
     ResourceSpec,
@@ -80,6 +85,89 @@ class CorylTests(unittest.TestCase):
         for name, resource in resources.items():
             with self.subTest(resource=name):
                 self.assertTrue(resource.path.is_relative_to(manager.root_path))
+
+    def test_single_root_mode_exposes_data_and_logs_namespaces(self) -> None:
+        manager = Coryl(self.root)
+
+        state = manager.data.add("state", "runtime/state.json")
+        logs = manager.logs.add("main", "runtime/logs")
+
+        self.assertEqual(state.path, (self.root / "runtime" / "state.json").resolve())
+        self.assertEqual(logs.path, (self.root / "runtime" / "logs").resolve())
+        self.assertEqual(manager.data.get("state").role, "data")
+        self.assertEqual(manager.logs.get("main").role, "logs")
+
+    def test_for_app_requires_optional_platformdirs_extra(self) -> None:
+        with mock.patch(
+            "coryl.manager.import_module",
+            side_effect=ModuleNotFoundError("No module named 'platformdirs'"),
+        ):
+            with self.assertRaises(CorylOptionalDependencyError) as caught:
+                Coryl.for_app("mytool")
+
+        self.assertIn("pip install coryl[platform]", str(caught.exception))
+
+    def test_for_app_routes_namespaces_to_platformdirs_roots(self) -> None:
+        platform_roots = {
+            "config": self.root / "platform-config",
+            "cache": self.root / "platform-cache",
+            "data": self.root / "platform-data",
+            "log": self.root / "platform-log",
+        }
+        fake_platformdirs, calls = self._make_fake_platformdirs_module(platform_roots)
+
+        with mock.patch("coryl.manager.import_module", return_value=fake_platformdirs):
+            app = Coryl.for_app(
+                "mytool",
+                app_author="Acme",
+                version="1.2.3",
+                roaming=True,
+                multipath=True,
+                ensure=True,
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "appname": "mytool",
+                    "appauthor": "Acme",
+                    "version": "1.2.3",
+                    "roaming": True,
+                    "multipath": True,
+                    "ensure_exists": True,
+                }
+            ],
+        )
+        self.assertEqual(app.root_path, platform_roots["data"].resolve())
+        self.assertEqual(app.config_root_path, platform_roots["config"].resolve())
+        self.assertEqual(app.cache_root_path, platform_roots["cache"].resolve())
+        self.assertEqual(app.data_root_path, platform_roots["data"].resolve())
+        self.assertEqual(app.log_root_path, platform_roots["log"].resolve())
+        self.assertTrue(app.config_root_path.is_dir())
+        self.assertTrue(app.cache_root_path.is_dir())
+        self.assertTrue(app.data_root_path.is_dir())
+        self.assertTrue(app.log_root_path.is_dir())
+
+        settings = app.configs.add("settings", "settings.toml")
+        cache = app.caches.add("http", "http")
+        data = app.data.add("state", "state.json")
+        log = app.logs.add("main", "app.log")
+
+        self.assertEqual(settings.path, (platform_roots["config"] / "settings.toml").resolve())
+        self.assertEqual(cache.path, (platform_roots["cache"] / "http").resolve())
+        self.assertEqual(data.path, (platform_roots["data"] / "state.json").resolve())
+        self.assertEqual(log.path, (platform_roots["log"] / "app.log").resolve())
+        self.assertEqual(app.path("settings"), settings.path)
+        self.assertEqual(app.path("http"), cache.path)
+        self.assertEqual(app.path("state"), data.path)
+        self.assertEqual(app.path("main"), log.path)
+
+        audit = app.audit_paths()
+        self.assertTrue(audit["resources"]["settings"]["safe"])
+        self.assertTrue(audit["resources"]["http"]["safe"])
+        self.assertTrue(audit["resources"]["state"]["safe"])
+        self.assertTrue(audit["resources"]["main"]["safe"])
 
     def test_registration_methods_reject_traversal(self) -> None:
         manager = Coryl(self.root)
@@ -721,32 +809,63 @@ resources:
         self.assertTrue(assets.require("icons", kind="directory").path.is_dir())
         self.assertEqual(len(assets.files("**/*.svg")), 2)
 
-    def test_package_assets_are_readonly_by_default(self) -> None:
-        package_name = "coryl_testpkg"
-        package_root = self.root / "package_src" / package_name
-        assets_root = package_root / "assets" / "icons"
-        assets_root.mkdir(parents=True, exist_ok=True)
-        (package_root / "__init__.py").write_text("", encoding="utf-8")
-        (assets_root / "logo.svg").write_text("<svg></svg>", encoding="utf-8")
-
-        sys.path.insert(0, str(package_root.parent))
-        importlib.invalidate_caches()
-        sys.modules.pop(package_name, None)
-        try:
+    def test_package_assets_can_read_text_and_bytes(self) -> None:
+        with self._test_asset_package() as package_name:
             manager = Coryl(self.root)
-            assets = manager.assets.package("pkg_assets", package_name, "assets")
-            logo = assets.require("icons", "logo.svg")
+            assets = manager.assets.from_package("bundled", package_name, "assets")
+
+            self.assertIsInstance(assets, PackageAssetGroup)
+            self.assertEqual(
+                assets.read_text("templates", "email.html"),
+                "<html>Hello from Coryl</html>",
+            )
+            self.assertEqual(
+                assets.read_bytes("images", "logo.bin"),
+                b"\x00\x01coryl",
+            )
+
+            template = assets.file("templates", "email.html")
+            self.assertIsInstance(template, PackageAssetResource)
+            with template.as_file() as materialized_path:
+                self.assertTrue(materialized_path.is_file())
+                self.assertEqual(
+                    materialized_path.read_text(encoding="utf-8"),
+                    "<html>Hello from Coryl</html>",
+                )
+
+    def test_package_assets_require_raises_for_missing_resources(self) -> None:
+        with self._test_asset_package() as package_name:
+            manager = Coryl(self.root)
+            assets = manager.assets.from_package("bundled", package_name, "assets")
+
+            with self.assertRaises(FileNotFoundError):
+                assets.require("missing.txt")
+
+    def test_package_assets_are_readonly_and_can_be_bootstrapped(self) -> None:
+        with self._test_asset_package() as package_name:
+            manager = Coryl(self.root)
+            assets = manager.assets.package("bundled", package_name, "assets")
+            template = assets.require("templates", "email.html")
 
             self.assertTrue(assets.readonly)
-            self.assertTrue(logo.readonly)
-            self.assertEqual(logo.read_text(), "<svg></svg>")
+            self.assertIsInstance(template, PackageAssetResource)
+            self.assertTrue(template.readonly)
 
             with self.assertRaises(CorylReadOnlyResourceError):
-                logo.write_text("<svg>changed</svg>")
-        finally:
-            sys.modules.pop(package_name, None)
-            importlib.invalidate_caches()
-            sys.path.remove(str(package_root.parent))
+                template.write_text("updated")
+
+            with self.assertRaises(CorylPathError):
+                _ = assets.path
+
+            copied_root = assets.copy_to(self.root / "bootstrap")
+            self.assertEqual(
+                (copied_root / "templates" / "email.html").read_text(encoding="utf-8"),
+                "<html>Hello from Coryl</html>",
+            )
+            self.assertEqual(
+                (copied_root / "images" / "logo.bin").read_bytes(),
+                b"\x00\x01coryl",
+            )
 
     def test_child_paths_cannot_escape_parent(self) -> None:
         manager = Coryl(
@@ -794,6 +913,31 @@ resources:
 
         with self.assertRaises(ResourceKindError):
             manager.configs.get("assets")
+
+    @contextmanager
+    def _test_asset_package(self) -> Iterator[str]:
+        package_name = "coryl_testpkg"
+        package_root = self.root / "package_src" / package_name
+        templates_root = package_root / "assets" / "templates"
+        images_root = package_root / "assets" / "images"
+        templates_root.mkdir(parents=True, exist_ok=True)
+        images_root.mkdir(parents=True, exist_ok=True)
+        (package_root / "__init__.py").write_text("", encoding="utf-8")
+        (templates_root / "email.html").write_text(
+            "<html>Hello from Coryl</html>",
+            encoding="utf-8",
+        )
+        (images_root / "logo.bin").write_bytes(b"\x00\x01coryl")
+
+        sys.path.insert(0, str(package_root.parent))
+        importlib.invalidate_caches()
+        sys.modules.pop(package_name, None)
+        try:
+            yield package_name
+        finally:
+            sys.modules.pop(package_name, None)
+            importlib.invalidate_caches()
+            sys.path.remove(str(package_root.parent))
 
     def _make_directory_link(self, link_path: Path, target_path: Path) -> None:
         self._directory_links.append(link_path)
@@ -877,6 +1021,43 @@ resources:
                 raise FakeTimeout(f"timeout for {self._lock_path}")
 
         return FakeFileLock, FakeTimeout
+
+    def _make_fake_platformdirs_module(
+        self,
+        platform_roots: dict[str, Path],
+    ) -> tuple[types.SimpleNamespace, list[dict[str, object]]]:
+        calls: list[dict[str, object]] = []
+
+        class FakePlatformDirs:
+            def __init__(
+                self,
+                *,
+                appname: str | None = None,
+                appauthor: str | None = None,
+                version: str | None = None,
+                roaming: bool = False,
+                multipath: bool = False,
+                ensure_exists: bool = False,
+            ) -> None:
+                calls.append(
+                    {
+                        "appname": appname,
+                        "appauthor": appauthor,
+                        "version": version,
+                        "roaming": roaming,
+                        "multipath": multipath,
+                        "ensure_exists": ensure_exists,
+                    }
+                )
+                self.user_config_path = platform_roots["config"]
+                self.user_cache_path = platform_roots["cache"]
+                self.user_data_path = platform_roots["data"]
+                self.user_log_path = platform_roots["log"]
+                if ensure_exists:
+                    for path in platform_roots.values():
+                        path.mkdir(parents=True, exist_ok=True)
+
+        return types.SimpleNamespace(PlatformDirs=FakePlatformDirs), calls
 
 
 if __name__ == "__main__":

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from importlib import resources as importlib_resources
+from importlib.resources.abc import Traversable
+from pathlib import Path, PurePosixPath
 from typing import IO, Literal
 
 from ._io import _atomic_write_bytes, _atomic_write_text
 from ._locks import managed_lock
 from ._paths import is_within_root, resolve_managed_path, validate_managed_path_input
 from .exceptions import (
+    CorylPathError,
     CorylReadOnlyResourceError,
     CorylValidationError,
     ResourceKindError,
@@ -22,7 +25,7 @@ from .exceptions import (
 from .serialization import dump_to_path, load_from_path, structured_format_for_path
 
 ResourceKind = Literal["file", "directory"]
-ResourceRole = Literal["resource", "config", "cache", "assets"]
+ResourceRole = Literal["resource", "config", "cache", "assets", "data", "logs"]
 MISSING = object()
 
 
@@ -53,7 +56,7 @@ class ResourceSpec:
             raise CorylValidationError("ResourceSpec.encoding must be a non-empty string.")
         if self.kind not in {"file", "directory"}:
             raise ResourceKindError("ResourceSpec.kind must be either 'file' or 'directory'.")
-        if self.role not in {"resource", "config", "cache", "assets"}:
+        if self.role not in {"resource", "config", "cache", "assets", "data", "logs"}:
             raise CorylValidationError("ResourceSpec.role is invalid.")
         if self.format is not None and not isinstance(self.format, str):
             raise CorylValidationError("ResourceSpec.format must be a string when provided.")
@@ -195,6 +198,58 @@ class ResourceSpec:
             backend=backend,
         )
 
+    @classmethod
+    def data(
+        cls,
+        path: str | Path,
+        *,
+        create: bool = True,
+        encoding: str = "utf-8",
+        readonly: bool = False,
+        required: bool = False,
+        format: str | None = None,
+        schema: str | None = None,
+        backend: str | None = None,
+    ) -> "ResourceSpec":
+        return cls(
+            relative_path=Path(path),
+            kind="file" if Path(path).suffix else "directory",
+            create=create,
+            encoding=encoding,
+            role="data",
+            readonly=readonly,
+            required=required,
+            format=format,
+            schema=schema,
+            backend=backend,
+        )
+
+    @classmethod
+    def logs(
+        cls,
+        path: str | Path,
+        *,
+        create: bool = True,
+        encoding: str = "utf-8",
+        readonly: bool = False,
+        required: bool = False,
+        format: str | None = None,
+        schema: str | None = None,
+        backend: str | None = None,
+    ) -> "ResourceSpec":
+        return cls(
+            relative_path=Path(path),
+            kind="file" if Path(path).suffix else "directory",
+            create=create,
+            encoding=encoding,
+            role="logs",
+            readonly=readonly,
+            required=required,
+            format=format,
+            schema=schema,
+            backend=backend,
+        )
+
 
 @dataclass(slots=True)
 class Resource:
@@ -211,6 +266,8 @@ class Resource:
     declared_format: str | None = None
     schema: str | None = None
     backend: str | None = None
+    managed_root: Path | None = None
+    root_name: str = "root"
 
     def __post_init__(self) -> None:
         self.path = self.path.resolve(strict=False)
@@ -224,7 +281,7 @@ class Resource:
             raise CorylValidationError("Resource.encoding must be a non-empty string.")
         if self.kind not in {"file", "directory"}:
             raise ResourceKindError("Resource.kind must be either 'file' or 'directory'.")
-        if self.role not in {"resource", "config", "cache", "assets"}:
+        if self.role not in {"resource", "config", "cache", "assets", "data", "logs"}:
             raise CorylValidationError("Resource.role is invalid.")
         if self.declared_format is not None and not isinstance(self.declared_format, str):
             raise CorylValidationError("Resource.declared_format must be a string when provided.")
@@ -232,6 +289,8 @@ class Resource:
             raise CorylValidationError("Resource.schema must be a string when provided.")
         if self.backend is not None and not isinstance(self.backend, str):
             raise CorylValidationError("Resource.backend must be a string when provided.")
+        if self.managed_root is not None:
+            self.managed_root = Path(self.managed_root).resolve(strict=False)
         if self.role == "config" and self.kind != "file":
             raise CorylValidationError("Config resources must be files.")
         if self.role in {"cache", "assets"} and self.kind != "directory":
@@ -423,6 +482,8 @@ class Resource:
             encoding=self.encoding,
             role=role,
             readonly=self.readonly,
+            managed_root=self.path,
+            root_name=self.root_name,
         )
 
     def iterdir(self) -> Iterator[Path]:
@@ -714,6 +775,310 @@ class AssetGroup(Resource):
         return [path for path in self.glob(pattern) if path.is_file()]
 
 
+@dataclass(slots=True)
+class PackageAssetResource:
+    """Read-only package asset file accessed through importlib.resources."""
+
+    name: str
+    package: str
+    traversable: Traversable
+    package_path: PurePosixPath
+    relative_path: PurePosixPath
+    kind: ResourceKind = "file"
+    readonly: bool = True
+    role: ResourceRole = "assets"
+    encoding: str = "utf-8"
+
+    def __str__(self) -> str:
+        return self.display_path
+
+    @property
+    def display_path(self) -> str:
+        relative = self.package_path.as_posix()
+        if relative == ".":
+            return f"package://{self.package}"
+        return f"package://{self.package}/{relative}"
+
+    @property
+    def path(self) -> Path:
+        raise CorylPathError(
+            f"Package asset '{self.display_path}' does not have a stable filesystem path. "
+            "Use as_file() to materialize a temporary path."
+        )
+
+    def exists(self) -> bool:
+        return _traversable_exists(self.traversable)
+
+    def is_file(self) -> bool:
+        return self.traversable.is_file()
+
+    def is_dir(self) -> bool:
+        return self.traversable.is_dir()
+
+    def open(self, *args: object, **kwargs: object) -> IO[str] | IO[bytes]:
+        mode = Resource._open_mode(args, kwargs)
+        if Resource._mode_writes(mode):
+            self._assert_writable("opened for writing")
+        self._assert_file_available()
+        return self.traversable.open(*args, **kwargs)
+
+    def read_text(self, *, encoding: str = "utf-8") -> str:
+        self._assert_file_available()
+        return self.traversable.read_text(encoding=encoding)
+
+    def read_bytes(self) -> bytes:
+        self._assert_file_available()
+        return self.traversable.read_bytes()
+
+    def write_text(
+        self,
+        content: str,
+        *,
+        encoding: str = "utf-8",
+        atomic: bool = True,
+    ) -> Path:
+        del content, encoding, atomic
+        self._assert_writable("written")
+        raise AssertionError("unreachable")
+
+    def write_bytes(self, content: bytes, *, atomic: bool = True) -> Path:
+        del content, atomic
+        self._assert_writable("written")
+        raise AssertionError("unreachable")
+
+    def write(self, content: object) -> Path:
+        del content
+        self._assert_writable("written")
+        raise AssertionError("unreachable")
+
+    def as_file(self) -> AbstractContextManager[Path]:
+        self._assert_file_available()
+        return importlib_resources.as_file(self.traversable)
+
+    def _assert_file_available(self) -> None:
+        if self.kind != "file" or self.traversable.is_dir():
+            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+        if not self.exists():
+            raise FileNotFoundError(self.display_path)
+
+    def _assert_writable(self, operation: str) -> None:
+        raise CorylReadOnlyResourceError(
+            f"Package asset '{self.name}' is read-only and cannot be {operation}."
+        )
+
+
+@dataclass(slots=True)
+class PackageAssetGroup:
+    """Read-only asset directory backed by importlib.resources."""
+
+    name: str
+    package: str
+    traversable: Traversable
+    package_path: PurePosixPath
+    relative_path: PurePosixPath
+    readonly: bool = True
+    role: ResourceRole = "assets"
+    kind: ResourceKind = "directory"
+    encoding: str = "utf-8"
+
+    def __str__(self) -> str:
+        return self.display_path
+
+    @property
+    def display_path(self) -> str:
+        relative = self.package_path.as_posix()
+        if relative == ".":
+            return f"package://{self.package}"
+        return f"package://{self.package}/{relative}"
+
+    @property
+    def path(self) -> Path:
+        raise CorylPathError(
+            f"Package asset group '{self.display_path}' does not have a stable filesystem path. "
+            "Use file(...).as_file() for individual files or copy_to() for directories."
+        )
+
+    def exists(self, *parts: str | Path) -> bool:
+        candidate = self._resolve(*parts)
+        return _traversable_exists(candidate)
+
+    def file(self, *parts: str | Path, create: bool = False) -> PackageAssetResource:
+        if create:
+            raise CorylReadOnlyResourceError(
+                f"Package asset group '{self.name}' is read-only and cannot create files."
+            )
+        package_path, relative_path, candidate = self._resolve_with_relative(*parts)
+        child_name = _child_resource_name(self.name, relative_path)
+        return PackageAssetResource(
+            name=child_name,
+            package=self.package,
+            traversable=candidate,
+            package_path=package_path,
+            relative_path=relative_path,
+            readonly=True,
+            encoding=self.encoding,
+        )
+
+    def directory(self, *parts: str | Path, create: bool = False) -> "PackageAssetGroup":
+        if create:
+            raise CorylReadOnlyResourceError(
+                f"Package asset group '{self.name}' is read-only and cannot create directories."
+            )
+        package_path, relative_path, candidate = self._resolve_with_relative(*parts)
+        child_name = _child_resource_name(self.name, relative_path)
+        return PackageAssetGroup(
+            name=child_name,
+            package=self.package,
+            traversable=candidate,
+            package_path=package_path,
+            relative_path=relative_path,
+            readonly=True,
+            encoding=self.encoding,
+        )
+
+    def require(
+        self,
+        *parts: str | Path,
+        kind: ResourceKind | None = None,
+    ) -> PackageAssetResource | "PackageAssetGroup":
+        package_path, relative_path, candidate = self._resolve_with_relative(*parts)
+        child_name = _child_resource_name(self.name, relative_path)
+        if not _traversable_exists(candidate):
+            raise FileNotFoundError(_package_display_path(self.package, package_path))
+
+        if kind == "file":
+            if candidate.is_dir():
+                raise ResourceKindError(f"Resource '{child_name}' is a directory, not a file.")
+            return self.file(*parts)
+        if kind == "directory":
+            if not candidate.is_dir():
+                raise ResourceKindError(f"Resource '{child_name}' is a file, not a directory.")
+            return self.directory(*parts)
+        if candidate.is_dir():
+            return self.directory(*parts)
+        return self.file(*parts)
+
+    def read_text(self, *parts: str | Path, encoding: str = "utf-8") -> str:
+        resource = self.require(*parts, kind="file")
+        if not isinstance(resource, PackageAssetResource):  # pragma: no cover - defensive
+            raise TypeError("Package asset read_text() resolved to a directory.")
+        return resource.read_text(encoding=encoding)
+
+    def read_bytes(self, *parts: str | Path) -> bytes:
+        resource = self.require(*parts, kind="file")
+        if not isinstance(resource, PackageAssetResource):  # pragma: no cover - defensive
+            raise TypeError("Package asset read_bytes() resolved to a directory.")
+        return resource.read_bytes()
+
+    def as_file(self, *parts: str | Path) -> AbstractContextManager[Path]:
+        if not parts:
+            raise CorylPathError(
+                f"Package asset group '{self.display_path}' cannot be exposed as a single path. "
+                "Use file(...).as_file() for individual files or copy_to() for directories."
+            )
+        resource = self.require(*parts, kind="file")
+        if not isinstance(resource, PackageAssetResource):  # pragma: no cover - defensive
+            raise TypeError("Package asset as_file() resolved to a directory.")
+        return resource.as_file()
+
+    def files(self, pattern: str = "**/*") -> list[PackageAssetResource]:
+        matches: list[PackageAssetResource] = []
+        for relative_path, candidate in _iter_traversable_files(self.traversable, PurePosixPath(".")):
+            if relative_path.match(pattern):
+                matches.append(
+                    PackageAssetResource(
+                        name=_child_resource_name(self.name, relative_path),
+                        package=self.package,
+                        traversable=candidate,
+                        package_path=_join_pure_posix(self.package_path, relative_path),
+                        relative_path=relative_path,
+                        readonly=True,
+                        encoding=self.encoding,
+                    )
+                )
+        return matches
+
+    def copy_to(self, target_directory: str | Path, *, overwrite: bool = False) -> Path:
+        destination_root = Path(target_directory).resolve(strict=False)
+        if destination_root.exists() and not destination_root.is_dir():
+            raise NotADirectoryError(destination_root)
+        destination_root.mkdir(parents=True, exist_ok=True)
+
+        for relative_path, candidate in _iter_traversable_files(self.traversable, PurePosixPath(".")):
+            destination_path = destination_root.joinpath(*relative_path.parts)
+            if destination_path.exists() and not overwrite:
+                raise FileExistsError(destination_path)
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            destination_path.write_bytes(candidate.read_bytes())
+
+        return destination_root
+
+    def _resolve(self, *parts: str | Path) -> Traversable:
+        return self._resolve_with_relative(*parts)[2]
+
+    def _resolve_with_relative(
+        self,
+        *parts: str | Path,
+    ) -> tuple[PurePosixPath, PurePosixPath, Traversable]:
+        normalized_parts = _normalize_package_parts(*parts)
+        package_path = self.package_path
+        relative_path = self.relative_path
+        candidate = self.traversable
+        for part in normalized_parts:
+            package_path = package_path / part
+            relative_path = relative_path / part
+            candidate = candidate.joinpath(part)
+        return package_path, relative_path, candidate
+
+
+def _normalize_package_parts(*parts: str | Path) -> tuple[str, ...]:
+    if not parts:
+        return ()
+
+    raw_path = validate_managed_path_input(Path(*parts))
+    return tuple(part for part in raw_path.parts if part not in {"."})
+
+
+def _traversable_exists(candidate: Traversable) -> bool:
+    return candidate.is_file() or candidate.is_dir()
+
+
+def _package_display_path(package: str, relative_path: PurePosixPath) -> str:
+    relative = relative_path.as_posix()
+    if relative == ".":
+        return f"package://{package}"
+    return f"package://{package}/{relative}"
+
+
+def _child_resource_name(root_name: str, relative_path: PurePosixPath) -> str:
+    relative = relative_path.as_posix()
+    if relative == ".":
+        return root_name
+    return f"{root_name}/{relative}"
+
+
+def _join_pure_posix(base_path: PurePosixPath, relative_path: PurePosixPath) -> PurePosixPath:
+    if relative_path == PurePosixPath("."):
+        return base_path
+    return base_path / relative_path
+
+
+def _iter_traversable_files(
+    root: Traversable,
+    base_relative_path: PurePosixPath,
+) -> Iterator[tuple[PurePosixPath, Traversable]]:
+    for child in sorted(root.iterdir(), key=lambda candidate: candidate.name):
+        child_relative_path = (
+            PurePosixPath(child.name)
+            if base_relative_path == PurePosixPath(".")
+            else base_relative_path / child.name
+        )
+        if child.is_dir():
+            yield from _iter_traversable_files(child, child_relative_path)
+            continue
+        yield child_relative_path, child
+
+
 def create_resource(
     *,
     name: str,
@@ -727,6 +1092,8 @@ def create_resource(
     declared_format: str | None = None,
     schema: str | None = None,
     backend: str | None = None,
+    managed_root: Path | None = None,
+    root_name: str = "root",
 ) -> Resource:
     resource_class: type[Resource]
     if role == "config":
@@ -750,4 +1117,6 @@ def create_resource(
         declared_format=declared_format,
         schema=schema,
         backend=backend,
+        managed_root=managed_root,
+        root_name=root_name,
     )

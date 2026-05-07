@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from importlib import import_module
+from importlib import import_module, resources as importlib_resources
 from collections.abc import Mapping
-from pathlib import Path
+from importlib.resources.abc import Traversable
+from pathlib import Path, PurePosixPath
 from typing import Generic, TypeVar
 
 from ._paths import is_within_root, resolve_managed_path, validate_managed_path_input
 from .exceptions import (
+    CorylOptionalDependencyError,
     CorylValidationError,
     ManifestFormatError,
     ResourceConflictError,
@@ -21,6 +23,7 @@ from .resources import (
     CacheResource,
     ConfigResource,
     LayeredConfigResource,
+    PackageAssetGroup,
     Resource,
     ResourceKind,
     ResourceSpec,
@@ -29,8 +32,15 @@ from .resources import (
 from .serialization import load_from_path
 
 ResourceInput = str | Path | ResourceSpec | Mapping[str, object]
-TResource = TypeVar("TResource", bound=Resource)
+AssetResource = AssetGroup | PackageAssetGroup
+ManagedResource = Resource | PackageAssetGroup
+TResource = TypeVar("TResource", bound=ManagedResource)
 MANIFEST_VERSION = 2
+DEFAULT_ROOT_NAME = "root"
+CONFIG_ROOT_NAME = "config_root"
+CACHE_ROOT_NAME = "cache_root"
+DATA_ROOT_NAME = "data_root"
+LOG_ROOT_NAME = "log_root"
 
 
 class _NamespaceBase(Generic[TResource]):
@@ -150,7 +160,7 @@ class CacheNamespace(_NamespaceBase[CacheResource]):
         return list(self.all())
 
 
-class AssetNamespace(_NamespaceBase[AssetGroup]):
+class AssetNamespace(_NamespaceBase[AssetResource]):
     """Register and retrieve asset directories."""
 
     def add(
@@ -178,7 +188,7 @@ class AssetNamespace(_NamespaceBase[AssetGroup]):
         *,
         readonly: bool = True,
         replace: bool = False,
-    ) -> AssetGroup:
+    ) -> PackageAssetGroup:
         return self._manager.register_package_assets(
             name,
             package,
@@ -187,14 +197,101 @@ class AssetNamespace(_NamespaceBase[AssetGroup]):
             replace=replace,
         )
 
-    def get(self, name: str) -> AssetGroup:
+    def from_package(
+        self,
+        name: str,
+        package: str,
+        path: str | Path = "",
+        *,
+        replace: bool = False,
+    ) -> PackageAssetGroup:
+        return self._manager.register_package_assets(
+            name,
+            package,
+            path,
+            replace=replace,
+        )
+
+    def get(self, name: str) -> AssetResource:
         return self._manager.asset_group(name)
 
-    def all(self) -> dict[str, AssetGroup]:
+    def all(self) -> dict[str, AssetResource]:
         return {
             name: resource
             for name, resource in self._manager._resources.items()
-            if isinstance(resource, AssetGroup)
+            if isinstance(resource, (AssetGroup, PackageAssetGroup))
+        }
+
+    def names(self) -> list[str]:
+        return list(self.all())
+
+
+class DataNamespace(_NamespaceBase[Resource]):
+    """Register and retrieve application data resources."""
+
+    def add(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        encoding: str = "utf-8",
+        readonly: bool = False,
+        replace: bool = False,
+    ) -> Resource:
+        return self._manager.register_data(
+            name,
+            relative_path,
+            create=create,
+            encoding=encoding,
+            readonly=readonly,
+            replace=replace,
+        )
+
+    def get(self, name: str) -> Resource:
+        return self._manager.data_resource(name)
+
+    def all(self) -> dict[str, Resource]:
+        return {
+            name: resource
+            for name, resource in self._manager._resources.items()
+            if resource.role == "data"
+        }
+
+    def names(self) -> list[str]:
+        return list(self.all())
+
+
+class LogNamespace(_NamespaceBase[Resource]):
+    """Register and retrieve application log resources."""
+
+    def add(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        encoding: str = "utf-8",
+        readonly: bool = False,
+        replace: bool = False,
+    ) -> Resource:
+        return self._manager.register_log(
+            name,
+            relative_path,
+            create=create,
+            encoding=encoding,
+            readonly=readonly,
+            replace=replace,
+        )
+
+    def get(self, name: str) -> Resource:
+        return self._manager.log_resource(name)
+
+    def all(self) -> dict[str, Resource]:
+        return {
+            name: resource
+            for name, resource in self._manager._resources.items()
+            if resource.role == "logs"
         }
 
     def names(self) -> list[str]:
@@ -211,22 +308,75 @@ class ResourceManager:
         resources: Mapping[str, ResourceInput] | None = None,
         manifest_path: str | Path | None = None,
         create_missing: bool = True,
+        _named_roots: Mapping[str, str | Path] | None = None,
     ) -> None:
-        self._root_path = Path(root).resolve(strict=False)
+        base_root = Path(root).resolve(strict=False)
+        self._root_paths = self._build_root_paths(base_root, _named_roots)
+        self._root_path = self._root_paths[DEFAULT_ROOT_NAME]
         self._manifest_path: Path | None = None
         self._manifest_data: dict[str, object] | None = None
         self._manifest_resource_names: set[str] = set()
         self._create_missing = create_missing
-        self._resources: dict[str, Resource] = {}
+        self._resources: dict[str, ManagedResource] = {}
         self._configs = ConfigNamespace(self)
         self._caches = CacheNamespace(self)
         self._assets = AssetNamespace(self)
+        self._data = DataNamespace(self)
+        self._logs = LogNamespace(self)
 
         if manifest_path is not None:
             self.load_manifest(manifest_path)
 
         if resources:
             self.register_many(resources, replace=True)
+
+    @classmethod
+    def for_app(
+        cls,
+        app_name: str,
+        app_author: str | None = None,
+        version: str | None = None,
+        roaming: bool = False,
+        multipath: bool = False,
+        ensure: bool = True,
+        create_missing: bool = True,
+    ) -> "ResourceManager":
+        if not isinstance(app_name, str) or not app_name.strip():
+            raise TypeError("app_name must be a non-empty string.")
+        if app_author is not None and (not isinstance(app_author, str) or not app_author.strip()):
+            raise TypeError("app_author must be a non-empty string when provided.")
+        if version is not None and (not isinstance(version, str) or not version.strip()):
+            raise TypeError("version must be a non-empty string when provided.")
+
+        try:
+            platformdirs = import_module("platformdirs")
+        except ModuleNotFoundError as error:
+            raise CorylOptionalDependencyError(
+                "Coryl.for_app() requires the optional 'platformdirs' dependency. "
+                "Install it with 'pip install coryl[platform]'."
+            ) from error
+
+        platform = platformdirs.PlatformDirs(
+            appname=app_name,
+            appauthor=app_author,
+            version=version,
+            roaming=roaming,
+            multipath=multipath,
+            ensure_exists=ensure,
+        )
+        data_root = Path(platform.user_data_path).resolve(strict=False)
+        named_roots = {
+            DEFAULT_ROOT_NAME: data_root,
+            CONFIG_ROOT_NAME: Path(platform.user_config_path).resolve(strict=False),
+            CACHE_ROOT_NAME: Path(platform.user_cache_path).resolve(strict=False),
+            DATA_ROOT_NAME: data_root,
+            LOG_ROOT_NAME: Path(platform.user_log_path).resolve(strict=False),
+        }
+        return cls(
+            data_root,
+            create_missing=create_missing,
+            _named_roots=named_roots,
+        )
 
     def __repr__(self) -> str:
         return (
@@ -268,6 +418,26 @@ class ResourceManager:
         return self._root_path
 
     @property
+    def config_root_path(self) -> Path:
+        return self._root_path_for(CONFIG_ROOT_NAME)
+
+    @property
+    def cache_root_path(self) -> Path:
+        return self._root_path_for(CACHE_ROOT_NAME)
+
+    @property
+    def data_root_path(self) -> Path:
+        return self._root_path_for(DATA_ROOT_NAME)
+
+    @property
+    def log_root_path(self) -> Path:
+        return self._root_path_for(LOG_ROOT_NAME)
+
+    @property
+    def named_roots(self) -> dict[str, Path]:
+        return dict(self._root_paths)
+
+    @property
     def root_folder_path(self) -> Path:
         return self.root_path
 
@@ -295,7 +465,7 @@ class ResourceManager:
         return self._manifest_data
 
     @property
-    def resources(self) -> dict[str, Resource]:
+    def resources(self) -> dict[str, ManagedResource]:
         return dict(self._resources)
 
     @property
@@ -311,12 +481,28 @@ class ResourceManager:
         return self._assets
 
     @property
+    def data(self) -> DataNamespace:
+        return self._data
+
+    @property
+    def logs(self) -> LogNamespace:
+        return self._logs
+
+    @property
     def file_paths(self) -> list[Path]:
-        return [resource.path for resource in self._resources.values() if resource.kind == "file"]
+        return [
+            resource.path
+            for resource in self._resources.values()
+            if isinstance(resource, Resource) and resource.kind == "file"
+        ]
 
     @property
     def directory_paths(self) -> list[Path]:
-        return [resource.path for resource in self._resources.values() if resource.kind == "directory"]
+        return [
+            resource.path
+            for resource in self._resources.values()
+            if isinstance(resource, Resource) and resource.kind == "directory"
+        ]
 
     @property
     def paths(self) -> list[Path]:
@@ -367,28 +553,8 @@ class ResourceManager:
         *,
         replace: bool = False,
     ) -> Resource:
-        if not isinstance(name, str) or not name.strip():
-            raise TypeError("Resource name must be a non-empty string.")
-        if name in self._resources and not replace:
-            raise ResourceConflictError(f"Resource '{name}' is already registered.")
-
         spec = self._coerce_resource_spec(definition)
-        resolved_path = self._resolve_from_root(spec.relative_path)
-        resource = create_resource(
-            name=name,
-            path=resolved_path,
-            kind=spec.kind,
-            create=spec.create,
-            encoding=spec.encoding,
-            role=spec.role,
-            readonly=spec.readonly,
-            required=spec.required,
-            declared_format=spec.format,
-            schema=spec.schema,
-            backend=spec.backend,
-        )
-        self._resources[name] = resource
-        return resource
+        return self._register_spec(name, spec, replace=replace)
 
     def register_file(
         self,
@@ -406,7 +572,7 @@ class ResourceManager:
             encoding=encoding,
             readonly=readonly,
         )
-        return self.register(name, spec, replace=replace)
+        return self._register_spec(name, spec, replace=replace, root_name=DEFAULT_ROOT_NAME)
 
     def register_directory(
         self,
@@ -422,7 +588,7 @@ class ResourceManager:
             create=self._default_create_value(create, readonly=readonly),
             readonly=readonly,
         )
-        return self.register(name, spec, replace=replace)
+        return self._register_spec(name, spec, replace=replace, root_name=DEFAULT_ROOT_NAME)
 
     def register_config(
         self,
@@ -457,10 +623,8 @@ class ResourceManager:
         secrets_dir: str | Path | None = None,
         replace: bool = False,
     ) -> LayeredConfigResource:
-        if not isinstance(name, str) or not name.strip():
-            raise TypeError("Resource name must be a non-empty string.")
-        if name in self._resources and not replace:
-            raise ResourceConflictError(f"Resource '{name}' is already registered.")
+        self._validate_resource_name(name)
+        self._ensure_replaceable(name, replace=replace)
 
         spec = ResourceSpec.config(
             relative_path,
@@ -468,7 +632,8 @@ class ResourceManager:
             encoding=encoding,
             readonly=readonly,
         )
-        resolved_path = self._resolve_from_root(spec.relative_path)
+        root_name = CONFIG_ROOT_NAME
+        resolved_path = self._resolve_from_named_root(spec.relative_path, root_name=root_name)
         resource = LayeredConfigResource(
             name=name,
             path=resolved_path,
@@ -481,7 +646,9 @@ class ResourceManager:
             declared_format=spec.format,
             schema=spec.schema,
             backend=spec.backend,
-            secrets_dir=self._resolve_secrets_dir(secrets_dir),
+            managed_root=self._root_path_for(root_name),
+            root_name=root_name,
+            secrets_dir=self._resolve_secrets_dir(secrets_dir, root_name=root_name),
         )
         self._resources[name] = resource
         return resource
@@ -526,6 +693,52 @@ class ResourceManager:
         )
         return self.asset_group(name)
 
+    def register_data(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        encoding: str = "utf-8",
+        readonly: bool = False,
+        replace: bool = False,
+    ) -> Resource:
+        self._register_spec(
+            name,
+            ResourceSpec.data(
+                relative_path,
+                create=self._default_create_value(create, readonly=readonly),
+                encoding=encoding,
+                readonly=readonly,
+            ),
+            replace=replace,
+            root_name=DATA_ROOT_NAME,
+        )
+        return self.data_resource(name)
+
+    def register_log(
+        self,
+        name: str,
+        relative_path: str | Path,
+        *,
+        create: bool | None = None,
+        encoding: str = "utf-8",
+        readonly: bool = False,
+        replace: bool = False,
+    ) -> Resource:
+        self._register_spec(
+            name,
+            ResourceSpec.logs(
+                relative_path,
+                create=self._default_create_value(create, readonly=readonly),
+                encoding=encoding,
+                readonly=readonly,
+            ),
+            replace=replace,
+            root_name=LOG_ROOT_NAME,
+        )
+        return self.log_resource(name)
+
     def register_package_assets(
         self,
         name: str,
@@ -534,27 +747,20 @@ class ResourceManager:
         *,
         readonly: bool = True,
         replace: bool = False,
-    ) -> AssetGroup:
-        if not isinstance(name, str) or not name.strip():
-            raise TypeError("Resource name must be a non-empty string.")
+    ) -> PackageAssetGroup:
+        self._validate_resource_name(name)
         if not isinstance(package, str) or not package.strip():
             raise TypeError("Package name must be a non-empty string.")
-        if name in self._resources and not replace:
-            raise ResourceConflictError(f"Resource '{name}' is already registered.")
+        self._ensure_replaceable(name, replace=replace)
 
-        package_root = self._resolve_package_root(package)
-        resolved_path = resolve_managed_path(
-            relative_path,
-            base_path=package_root,
-            allowed_root=package_root,
-        )
-        resource = AssetGroup(
+        root_traversable = self._resolve_package_assets(package, relative_path)
+        resource = PackageAssetGroup(
             name=name,
-            path=resolved_path,
-            kind="directory",
-            create=False,
-            role="assets",
-            readonly=readonly,
+            package=package,
+            traversable=root_traversable,
+            package_path=PurePosixPath(self._package_relative_path(relative_path).as_posix()),
+            relative_path=PurePosixPath("."),
+            readonly=True,
         )
         self._resources[name] = resource
         return resource
@@ -564,13 +770,13 @@ class ResourceManager:
         resources: Mapping[str, ResourceInput],
         *,
         replace: bool = False,
-    ) -> dict[str, Resource]:
-        registered: dict[str, Resource] = {}
+    ) -> dict[str, ManagedResource]:
+        registered: dict[str, ManagedResource] = {}
         for name, definition in resources.items():
             registered[name] = self.register(name, definition, replace=replace)
         return registered
 
-    def resource(self, name: str) -> Resource:
+    def resource(self, name: str) -> ManagedResource:
         try:
             return self._resources[name]
         except KeyError as error:
@@ -578,11 +784,11 @@ class ResourceManager:
 
     def file(self, name: str) -> Resource:
         resource = self.resource(name)
-        if resource.kind != "file":
+        if not isinstance(resource, Resource) or resource.kind != "file":
             raise ResourceKindError(f"Resource '{name}' is a directory, not a file.")
         return resource
 
-    def directory(self, name: str) -> Resource:
+    def directory(self, name: str) -> ManagedResource:
         resource = self.resource(name)
         if resource.kind != "directory":
             raise ResourceKindError(f"Resource '{name}' is a file, not a directory.")
@@ -600,10 +806,22 @@ class ResourceManager:
             raise ResourceKindError(f"Resource '{name}' is not a cache resource.")
         return resource
 
-    def asset_group(self, name: str) -> AssetGroup:
+    def asset_group(self, name: str) -> AssetResource:
         resource = self.resource(name)
-        if not isinstance(resource, AssetGroup):
+        if not isinstance(resource, (AssetGroup, PackageAssetGroup)):
             raise ResourceKindError(f"Resource '{name}' is not an asset resource.")
+        return resource
+
+    def data_resource(self, name: str) -> Resource:
+        resource = self.resource(name)
+        if resource.role != "data":
+            raise ResourceKindError(f"Resource '{name}' is not a data resource.")
+        return resource
+
+    def log_resource(self, name: str) -> Resource:
+        resource = self.resource(name)
+        if resource.role != "logs":
+            raise ResourceKindError(f"Resource '{name}' is not a log resource.")
         return resource
 
     def path(self, name: str) -> Path:
@@ -624,12 +842,23 @@ class ResourceManager:
     def audit_paths(self) -> dict[str, object]:
         resources: dict[str, dict[str, object]] = {}
         for name, resource in self._resources.items():
+            if isinstance(resource, PackageAssetGroup):
+                resources[name] = {
+                    "path": resource.display_path,
+                    "exists": resource.exists(),
+                    "kind": resource.kind,
+                    "role": resource.role,
+                    "safe": True,
+                }
+                continue
+
+            managed_root = resource.managed_root or self.root_path
             resources[name] = {
                 "path": str(resource.path),
                 "exists": resource.exists(),
                 "kind": resource.kind,
                 "role": resource.role,
-                "safe": is_within_root(resource.path, self.root_path),
+                "safe": is_within_root(resource.path, managed_root),
             }
 
         return {
@@ -643,12 +872,61 @@ class ResourceManager:
         *,
         allow_absolute: bool = False,
     ) -> Path:
-        return resolve_managed_path(
+        return self._resolve_from_named_root(
             relative_path,
-            base_path=self.root_path,
-            allowed_root=self.root_path,
+            root_name=DEFAULT_ROOT_NAME,
             allow_absolute=allow_absolute,
         )
+
+    def _resolve_from_named_root(
+        self,
+        relative_path: str | Path,
+        *,
+        root_name: str,
+        allow_absolute: bool = False,
+    ) -> Path:
+        root_path = self._root_path_for(root_name)
+        return resolve_managed_path(
+            relative_path,
+            base_path=root_path,
+            allowed_root=root_path,
+            allow_absolute=allow_absolute,
+        )
+
+    def _register_spec(
+        self,
+        name: str,
+        spec: ResourceSpec,
+        *,
+        replace: bool = False,
+        root_name: str | None = None,
+    ) -> Resource:
+        self._validate_resource_name(name)
+        self._ensure_replaceable(name, replace=replace)
+
+        actual_root_name = root_name or self._root_name_for_role(spec.role)
+        managed_root = self._root_path_for(actual_root_name)
+        resolved_path = self._resolve_from_named_root(
+            spec.relative_path,
+            root_name=actual_root_name,
+        )
+        resource = create_resource(
+            name=name,
+            path=resolved_path,
+            kind=spec.kind,
+            create=spec.create,
+            encoding=spec.encoding,
+            role=spec.role,
+            readonly=spec.readonly,
+            required=spec.required,
+            declared_format=spec.format,
+            schema=spec.schema,
+            backend=spec.backend,
+            managed_root=managed_root,
+            root_name=actual_root_name,
+        )
+        self._resources[name] = resource
+        return resource
 
     def _coerce_resource_spec(self, definition: ResourceInput) -> ResourceSpec:
         if isinstance(definition, ResourceSpec):
@@ -733,6 +1011,52 @@ class ResourceManager:
         if readonly:
             return False
         return self._create_missing
+
+    @staticmethod
+    def _build_root_paths(
+        base_root: Path,
+        named_roots: Mapping[str, str | Path] | None,
+    ) -> dict[str, Path]:
+        roots = {
+            DEFAULT_ROOT_NAME: base_root.resolve(strict=False),
+            CONFIG_ROOT_NAME: base_root.resolve(strict=False),
+            CACHE_ROOT_NAME: base_root.resolve(strict=False),
+            DATA_ROOT_NAME: base_root.resolve(strict=False),
+            LOG_ROOT_NAME: base_root.resolve(strict=False),
+        }
+        if named_roots is None:
+            return roots
+
+        for name, path_value in named_roots.items():
+            roots[name] = Path(path_value).resolve(strict=False)
+        return roots
+
+    @staticmethod
+    def _root_name_for_role(role: str) -> str:
+        if role == "config":
+            return CONFIG_ROOT_NAME
+        if role == "cache":
+            return CACHE_ROOT_NAME
+        if role == "data":
+            return DATA_ROOT_NAME
+        if role == "logs":
+            return LOG_ROOT_NAME
+        return DEFAULT_ROOT_NAME
+
+    def _root_path_for(self, root_name: str) -> Path:
+        try:
+            return self._root_paths[root_name]
+        except KeyError as error:
+            raise CorylValidationError(f"Unknown managed root {root_name!r}.") from error
+
+    @staticmethod
+    def _validate_resource_name(name: str) -> None:
+        if not isinstance(name, str) or not name.strip():
+            raise TypeError("Resource name must be a non-empty string.")
+
+    def _ensure_replaceable(self, name: str, *, replace: bool) -> None:
+        if name in self._resources and not replace:
+            raise ResourceConflictError(f"Resource '{name}' is already registered.")
 
     @staticmethod
     def _infer_kind(path_value: str | Path) -> ResourceKind:
@@ -870,29 +1194,42 @@ class ResourceManager:
                 f"Coryl currently supports version {MANIFEST_VERSION}."
             )
 
-    def _resolve_secrets_dir(self, secrets_dir: str | Path | None) -> Path | None:
+    def _resolve_secrets_dir(
+        self,
+        secrets_dir: str | Path | None,
+        *,
+        root_name: str = DEFAULT_ROOT_NAME,
+    ) -> Path | None:
         if secrets_dir is None:
             return None
 
         raw_path = validate_managed_path_input(secrets_dir, allow_absolute=True)
         if raw_path.is_absolute():
             return raw_path.resolve(strict=False)
-        return self._resolve_from_root(raw_path)
+        return self._resolve_from_named_root(raw_path, root_name=root_name)
 
     @staticmethod
-    def _resolve_package_root(package: str) -> Path:
-        module = import_module(package)
-        spec = getattr(module, "__spec__", None)
-        search_locations = None if spec is None else spec.submodule_search_locations
-        if search_locations:
-            return Path(next(iter(search_locations))).resolve(strict=False)
+    def _package_relative_path(relative_path: str | Path) -> Path:
+        return validate_managed_path_input(relative_path)
 
-        module_file = getattr(module, "__file__", None)
-        if module_file is None:
+    @classmethod
+    def _resolve_package_assets(cls, package: str, relative_path: str | Path) -> Traversable:
+        try:
+            traversable = importlib_resources.files(package)
+        except ModuleNotFoundError as error:
+            raise CorylValidationError(f"Package '{package}' could not be imported.") from error
+
+        package_path = cls._package_relative_path(relative_path)
+        for part in package_path.parts:
+            if part == ".":
+                continue
+            traversable = traversable.joinpath(part)
+
+        if not traversable.is_dir():
             raise CorylValidationError(
-                f"Package '{package}' does not expose a filesystem-backed location."
+                f"Package asset root '{package}:{package_path.as_posix()}' must be a directory."
             )
-        return Path(module_file).resolve(strict=False).parent
+        return traversable
 
 
 class Coryl(ResourceManager):

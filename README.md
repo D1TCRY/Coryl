@@ -18,6 +18,7 @@ Coryl gives you one place to declare these resources, keeps them inside a safe r
 - Automatic creation of missing files and directories when desired
 - Built-in support for `.json`, `.toml`, `.yaml`, and `.yml`
 - Specialized APIs for `configs`, `caches`, and `assets`
+- Optional app-directory support through `platformdirs`
 - Explicit read-only resources for mounted config, cache, and asset paths
 - Generic file and directory management when you do not need special behavior
 - Versioned manifest loading from JSON, TOML, or YAML with legacy compatibility
@@ -33,6 +34,12 @@ Optional file locking support:
 
 ```bash
 pip install coryl[lock]
+```
+
+Optional platform-aware app roots:
+
+```bash
+pip install coryl[platform]
 ```
 
 Python 3.10+ is supported.
@@ -53,6 +60,8 @@ From there you can register:
 - generic directories
 - config files
 - cache directories
+- persistent app data
+- log files and directories
 - asset directories
 
 ## Quick Start
@@ -94,6 +103,38 @@ app = Coryl(root="/path/to/project")
 
 Coryl refuses to register or create managed resources outside that root.
 Registration paths are expected to be relative to `root`, so absolute paths are rejected by default and traversal segments such as `..` are not accepted.
+
+### Installed Applications
+
+If you are writing an installed CLI, desktop app, or service, you can let Coryl use OS-specific application directories through `platformdirs`.
+
+Install the optional extra:
+
+```bash
+pip install coryl[platform]
+```
+
+Then create the manager with `Coryl.for_app(...)`:
+
+```python
+from coryl import Coryl
+
+app = Coryl.for_app("mytool", app_author="Acme")
+
+settings = app.configs.add("settings", "settings.toml")
+cache = app.caches.add("http", "http")
+data = app.data.add("state", "state.json")
+log = app.logs.add("main", "app.log")
+```
+
+`Coryl(root=".")` stays unchanged. `for_app()` simply routes:
+
+- `app.configs` into the platform config directory
+- `app.caches` into the platform cache directory
+- `app.data` into the platform data directory
+- `app.logs` into the platform log directory
+
+The `assets` namespace still works as before. In app mode it remains rooted under the manager's main root, which defaults to the application data directory.
 
 ### Resource Types
 
@@ -222,7 +263,7 @@ print(state)
 
 ### Asset Directories
 
-Use `assets.add()` or `register_assets()` for static or bundled application assets.
+Use `assets.add()` or `register_assets()` for filesystem-backed asset directories.
 
 ```python
 assets = app.assets.add("ui", "assets")
@@ -249,10 +290,37 @@ print(logo.path)
 print([path.name for path in all_svgs])
 ```
 
-For filesystem-backed package assets, use `assets.package(...)`. Package asset groups are read-only by default.
+### Bundled Package Assets
+
+Use `assets.from_package()` when assets are bundled inside an importable Python package and should be read through `importlib.resources`.
 
 ```python
-assets = app.assets.package("templates", "myapp", "assets/templates")
+assets = app.assets.from_package("templates", "myapp", "assets/templates")
+
+email_template = assets.read_text("email.html")
+logo_bytes = assets.read_bytes("images", "logo.bin")
+```
+
+Bundled package assets are different from filesystem `AssetGroup` instances:
+
+- filesystem assets expose real `Path` objects and can be writable
+- package assets are read-only by default
+- package assets may not have a stable filesystem path when loaded from a wheel or zip file
+- use `file(...).as_file()` to materialize a temporary path for one bundled file
+- use `copy_to(...)` to bootstrap an entire bundled asset directory into a writable location
+
+`assets.package(...)` is kept as a compatibility alias for `assets.from_package(...)`.
+
+Example:
+
+```python
+assets = app.assets.from_package("bundled", "myapp", "assets")
+
+template = assets.file("templates", "email.html")
+with template.as_file() as path:
+    print(path.read_text(encoding="utf-8"))
+
+assets.copy_to("runtime/assets")
 ```
 
 ## Reading and Writing Files
@@ -283,7 +351,7 @@ Any file, directory, config, cache, or asset resource can be marked with `readon
 ```python
 settings = app.register_config("settings", "config/settings.toml", readonly=True)
 cache = app.register_cache("http_cache", ".cache/http", readonly=True)
-assets = app.assets.package("ui", "myapp", "assets/ui")
+assets = app.assets.from_package("ui", "myapp", "assets/ui")
 ```
 
 Read operations still work normally. Mutating operations such as writes, deletes, clears, updates, and write-mode opens raise `CorylReadOnlyResourceError` with a clear message.
@@ -499,11 +567,14 @@ This makes Coryl useful for applications that want predictable, centralized reso
 Main entry points:
 
 - `Coryl(root, resources=None, manifest_path=None, create_missing=True)`
+- `Coryl.for_app(app_name, app_author=None, version=None, roaming=False, multipath=False, ensure=True, create_missing=True)`
 - `register_file(name, path, ...)`
 - `register_directory(name, path, ...)`
 - `register_config(name, path, ...)`
 - `register_layered_config(name, path, ..., secrets_dir=None)`
 - `register_cache(name, path, ...)`
+- `register_data(name, path, ...)`
+- `register_log(name, path, ...)`
 - `register_assets(name, path, ...)`
 - `register_package_assets(name, package, relative_path=".", ...)`
 - `resource(name)`
@@ -523,7 +594,10 @@ Namespaces:
 
 - `app.configs`
 - `app.caches`
+- `app.data`
+- `app.logs`
 - `app.assets`
+- `app.assets.from_package(name, package, path="")`
 
 ### Generic Resource
 
@@ -577,6 +651,18 @@ Additional helpers:
 - `require(...)`
 - `files(pattern="**/*")`
 - `glob(pattern)`
+
+### PackageAssetGroup
+
+Additional helpers:
+
+- `read_text(...)`
+- `read_bytes(...)`
+- `file(...)`
+- `require(...)`
+- `exists(...)`
+- `files(pattern="**/*")`
+- `copy_to(target_directory, overwrite=False)`
 
 ## Examples
 
