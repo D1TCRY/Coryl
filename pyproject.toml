@@ -1,0 +1,33 @@
+[project]
+name = "coryl" # Name of the library
+version = "0.0.1" # Version of the library
+dependencies = [
+    
+] # Dependencies of the library
+authors = [
+    { name="Cecchelani Diego", email="ceccdieg@gmail.com" },
+] # Authors of the library
+description = "..." # Description of the library
+readme = "README.md" # Readme file of the library
+requires-python = ">=3.10" # Required python version
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent", 
+    "Development Status :: 1 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+] # Classifiers of the library
+urls = { Homepage = "https://www.coryl.net" }
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+
+
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+package-data = { coryl = ["*", "**/*"] } # Include all files and subdirectories in the package 'Example'
+packages = { find = { where=["src"], include=["coryl*"] } }  # Con layout src/, ricorda che i moduli sono sotto src/Example/... e l’import in runtime resta import Example.
