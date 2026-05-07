@@ -268,6 +268,65 @@ class CorylTests(unittest.TestCase):
 
         self.assertIn("pip install coryl[lock]", str(caught.exception))
 
+    def test_watch_dependency_missing_error_is_clear(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.register_file("settings", "config/settings.json")
+
+        with mock.patch(
+            "coryl.resources.import_module",
+            side_effect=ModuleNotFoundError("No module named 'watchfiles'"),
+        ):
+            with self.assertRaises(CorylOptionalDependencyError) as caught:
+                next(settings.watch())
+
+        self.assertIn("pip install coryl[watch]", str(caught.exception))
+
+    def test_file_resource_watch_filters_unrelated_changes(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.register_file("settings", "config/settings.json")
+        calls: list[tuple[tuple[Path, ...], dict[str, object]]] = []
+
+        def fake_watch(*paths: Path, **kwargs: object) -> Iterator[set[tuple[str, str]]]:
+            calls.append((paths, dict(kwargs)))
+            yield {
+                ("modified", str(settings.path)),
+                ("modified", str(settings.path.parent / "other.json")),
+            }
+            yield set()
+
+        with mock.patch(
+            "coryl.resources.import_module",
+            return_value=types.SimpleNamespace(watch=fake_watch),
+        ):
+            watcher = settings.watch(yield_on_timeout=True)
+            first = next(watcher)
+            second = next(watcher)
+
+        self.assertEqual(first, {("modified", str(settings.path))})
+        self.assertEqual(second, set())
+        self.assertEqual(calls[0][0], (settings.path.parent,))
+        self.assertFalse(calls[0][1]["recursive"])
+        self.assertTrue(calls[0][1]["yield_on_timeout"])
+
+    def test_directory_resource_watch_uses_directory_path(self) -> None:
+        manager = Coryl(self.root)
+        assets = manager.register_directory("assets", "assets")
+        calls: list[tuple[tuple[Path, ...], dict[str, object]]] = []
+
+        def fake_watch(*paths: Path, **kwargs: object) -> Iterator[set[tuple[str, str]]]:
+            calls.append((paths, dict(kwargs)))
+            yield {("added", str(assets.path / "images" / "logo.svg"))}
+
+        with mock.patch(
+            "coryl.resources.import_module",
+            return_value=types.SimpleNamespace(watch=fake_watch),
+        ):
+            changes = next(assets.watch())
+
+        self.assertEqual(changes, {("added", str(assets.path / "images" / "logo.svg"))})
+        self.assertEqual(calls[0][0], (assets.path,))
+        self.assertTrue(calls[0][1]["recursive"])
+
     def test_explicit_structured_write_helpers_still_work(self) -> None:
         manager = Coryl(self.root)
         payload = {"name": "Coryl", "version": 1}
@@ -330,6 +389,51 @@ class CorylTests(unittest.TestCase):
             {"theme": "light", "language": "it", "timezone": "Europe/Rome"},
         )
         self.assertEqual(settings.load()["timezone"], "Europe/Rome")
+
+    def test_config_watch_reload_yields_reloaded_documents(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.json")
+        settings.save({"theme": "light"})
+        calls: list[tuple[tuple[Path, ...], dict[str, object]]] = []
+
+        def fake_watch(*paths: Path, **kwargs: object) -> Iterator[set[tuple[str, str]]]:
+            calls.append((paths, dict(kwargs)))
+            settings.save({"theme": "dark"})
+            yield {("modified", str(settings.path))}
+            settings.save({"theme": "blue"})
+            yield {("modified", str(settings.path))}
+
+        with mock.patch(
+            "coryl.resources.import_module",
+            return_value=types.SimpleNamespace(watch=fake_watch),
+        ):
+            watcher = settings.watch_reload(debounce=25)
+            first = next(watcher)
+            second = next(watcher)
+
+        self.assertEqual(first, {"theme": "dark"})
+        self.assertEqual(second, {"theme": "blue"})
+        self.assertEqual(calls[0][0], (settings.path.parent,))
+        self.assertEqual(calls[0][1]["debounce"], 25)
+        self.assertFalse(calls[0][1]["recursive"])
+
+    def test_config_on_change_runs_callback_in_explicit_loop(self) -> None:
+        manager = Coryl(self.root)
+        settings = manager.configs.add("settings", "config/settings.json")
+        callback = mock.Mock()
+
+        def fake_watch(*paths: Path, **kwargs: object) -> Iterator[set[tuple[str, str]]]:
+            del paths, kwargs
+            settings.save({"theme": "dark"})
+            yield {("modified", str(settings.path))}
+
+        with mock.patch(
+            "coryl.resources.import_module",
+            return_value=types.SimpleNamespace(watch=fake_watch),
+        ):
+            settings.on_change(callback)
+
+        callback.assert_called_once_with({"theme": "dark"})
 
     def test_config_load_typed_validates_data(self) -> None:
         manager = Coryl(self.root)

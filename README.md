@@ -54,6 +54,12 @@ Optional typed config validation with Pydantic:
 pip install coryl[pydantic]
 ```
 
+Optional file watching and config reload helpers:
+
+```bash
+pip install coryl[watch]
+```
+
 Python 3.10+ is supported.
 
 ## Core Idea
@@ -238,6 +244,27 @@ settings.save({"theme": "light", "language": "en"})
 settings.update(language="it", timezone="Europe/Rome")
 
 print(settings.load())
+```
+
+Optional file watching stays explicit and blocking. Coryl does not start background reload threads on its own.
+
+```bash
+pip install coryl[watch]
+```
+
+```python
+def apply(config):
+    print("reloaded", config)
+
+
+for config in settings.watch_reload():
+    apply(config)
+```
+
+If you prefer a tiny callback wrapper around the same explicit loop:
+
+```python
+settings.on_change(apply)
 ```
 
 Optional typed config validation works with Pydantic v2 or `pydantic-settings`, but Coryl itself does not require either dependency unless you call the typed helpers.
@@ -757,6 +784,7 @@ Useful methods:
 - `write_yaml(data, atomic=True)`
 - `content()`
 - `write(value)`
+- `watch(...)`
 
 ### ConfigResource
 
@@ -771,6 +799,8 @@ Additional helpers:
 - `migration(from_version=..., to_version=...)`
 - `migrate()`
 - `update(..., lock=False)`
+- `watch_reload(...)`
+- `on_change(callback, ...)`
 - `load_base()` on layered configs
 
 Layered configs additionally provide:

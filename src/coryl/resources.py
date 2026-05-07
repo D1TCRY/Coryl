@@ -35,6 +35,9 @@ ResourceRole = Literal["resource", "config", "cache", "assets", "data", "logs"]
 MISSING = object()
 TValidated = TypeVar("TValidated")
 TMigrationFunc = TypeVar("TMigrationFunc", bound=Callable[..., object])
+WatchFilter = Callable[[object, str], bool]
+WatchChange = tuple[object, str]
+WatchChanges = set[WatchChange]
 _INT_PATTERN = re.compile(r"^[+-]?(?:0|[1-9]\d*)$")
 _FLOAT_PATTERN = re.compile(
     r"^[+-]?(?:(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)$"
@@ -518,6 +521,43 @@ class Resource:
             self.ensure()
         return sorted(self.path.glob(pattern))
 
+    def watch(
+        self,
+        *,
+        watch_filter: WatchFilter | None = None,
+        debounce: int = 1600,
+        step: int = 50,
+        stop_event: object | None = None,
+        yield_on_timeout: bool = False,
+        raise_interrupt: bool = True,
+        force_polling: bool | None = None,
+        poll_delay_ms: int = 300,
+        recursive: bool | None = None,
+        ignore_permission_denied: bool | None = None,
+    ) -> Iterator[WatchChanges]:
+        watched_files: tuple[Path, ...] = ()
+        watched_directories: tuple[Path, ...] = ()
+        if self.kind == "file":
+            watched_files = (self.path,)
+        else:
+            watched_directories = (self.path,)
+
+        effective_recursive = self.kind == "directory" if recursive is None else recursive
+        yield from _watch_relevant_paths(
+            files=watched_files,
+            directories=watched_directories,
+            watch_filter=watch_filter,
+            debounce=debounce,
+            step=step,
+            stop_event=stop_event,
+            yield_on_timeout=yield_on_timeout,
+            raise_interrupt=raise_interrupt,
+            force_polling=force_polling,
+            poll_delay_ms=poll_delay_ms,
+            recursive=effective_recursive,
+            ignore_permission_denied=ignore_permission_denied,
+        )
+
     @contextmanager
     def lock(self, timeout: float | None = None) -> Iterator["Resource"]:
         self._assert_writable("locked")
@@ -697,6 +737,65 @@ class ConfigResource(Resource):
             resource_name=self.name,
         )
 
+    def watch_reload(
+        self,
+        *,
+        watch_filter: WatchFilter | None = None,
+        debounce: int = 1600,
+        step: int = 50,
+        stop_event: object | None = None,
+        raise_interrupt: bool = True,
+        force_polling: bool | None = None,
+        poll_delay_ms: int = 300,
+        recursive: bool = False,
+        ignore_permission_denied: bool | None = None,
+        default: object = MISSING,
+    ) -> Iterator[object]:
+        yield from self._watch_reload_iterator(
+            watch_filter=watch_filter,
+            debounce=debounce,
+            step=step,
+            stop_event=stop_event,
+            raise_interrupt=raise_interrupt,
+            force_polling=force_polling,
+            poll_delay_ms=poll_delay_ms,
+            recursive=recursive,
+            ignore_permission_denied=ignore_permission_denied,
+            default=default,
+        )
+
+    def on_change(
+        self,
+        callback: Callable[[object], object],
+        *,
+        watch_filter: WatchFilter | None = None,
+        debounce: int = 1600,
+        step: int = 50,
+        stop_event: object | None = None,
+        raise_interrupt: bool = True,
+        force_polling: bool | None = None,
+        poll_delay_ms: int = 300,
+        recursive: bool = False,
+        ignore_permission_denied: bool | None = None,
+        default: object = MISSING,
+    ) -> None:
+        if not callable(callback):
+            raise TypeError("ConfigResource.on_change() requires a callable callback.")
+
+        for document in self.watch_reload(
+            watch_filter=watch_filter,
+            debounce=debounce,
+            step=step,
+            stop_event=stop_event,
+            raise_interrupt=raise_interrupt,
+            force_polling=force_polling,
+            poll_delay_ms=poll_delay_ms,
+            recursive=recursive,
+            ignore_permission_denied=ignore_permission_denied,
+            default=default,
+        ):
+            callback(document)
+
     def migration(
         self,
         *,
@@ -799,6 +898,44 @@ class ConfigResource(Resource):
             with self.lock():
                 return apply_update()
         return apply_update()
+
+    def _watch_reload_iterator(
+        self,
+        *,
+        watch_filter: WatchFilter | None = None,
+        debounce: int = 1600,
+        step: int = 50,
+        stop_event: object | None = None,
+        raise_interrupt: bool = True,
+        force_polling: bool | None = None,
+        poll_delay_ms: int = 300,
+        recursive: bool = False,
+        ignore_permission_denied: bool | None = None,
+        default: object = MISSING,
+    ) -> Iterator[object]:
+        for changes in _watch_relevant_paths(
+            files=self._watch_file_paths(),
+            directories=self._watch_directory_paths(),
+            watch_filter=watch_filter,
+            debounce=debounce,
+            step=step,
+            stop_event=stop_event,
+            yield_on_timeout=False,
+            raise_interrupt=raise_interrupt,
+            force_polling=force_polling,
+            poll_delay_ms=poll_delay_ms,
+            recursive=recursive,
+            ignore_permission_denied=ignore_permission_denied,
+        ):
+            if not changes:
+                continue
+            yield self.load(default=default)
+
+    def _watch_file_paths(self) -> tuple[Path, ...]:
+        return (self.path,)
+
+    def _watch_directory_paths(self) -> tuple[Path, ...]:
+        return ()
 
 
 @dataclass(slots=True)
@@ -1023,6 +1160,17 @@ class LayeredConfigResource(ConfigResource):
             if candidate.is_file():
                 overrides[candidate.name] = candidate.read_text(encoding=self.encoding)
         return overrides
+
+    def _watch_file_paths(self) -> tuple[Path, ...]:
+        file_paths = list(self.layer_paths)
+        if self.secrets_path is not None:
+            file_paths.append(self.secrets_path)
+        return tuple(dict.fromkeys(path.resolve(strict=False) for path in file_paths))
+
+    def _watch_directory_paths(self) -> tuple[Path, ...]:
+        if self.secrets_dir is None:
+            return ()
+        return (self.secrets_dir.resolve(strict=False),)
 
 
 class CacheResource(Resource):
@@ -1949,6 +2097,80 @@ def _copy_mapping(mapping: Mapping[str, object]) -> dict[str, object]:
     return {key: _copy_config_value(value) for key, value in mapping.items()}
 
 
+def _watch_relevant_paths(
+    *,
+    files: Iterable[Path] = (),
+    directories: Iterable[Path] = (),
+    watch_filter: WatchFilter | None = None,
+    debounce: int = 1600,
+    step: int = 50,
+    stop_event: object | None = None,
+    yield_on_timeout: bool = False,
+    raise_interrupt: bool = True,
+    force_polling: bool | None = None,
+    poll_delay_ms: int = 300,
+    recursive: bool = True,
+    ignore_permission_denied: bool | None = None,
+) -> Iterator[WatchChanges]:
+    watched_files = tuple(dict.fromkeys(Path(path).resolve(strict=False) for path in files))
+    watched_directories = tuple(
+        dict.fromkeys(Path(path).resolve(strict=False) for path in directories)
+    )
+    watch_roots = _watch_roots_for_targets(watched_files, watched_directories)
+    if not watch_roots:
+        return
+
+    watch = _load_watchfiles_watch()
+    for changes in watch(
+        *watch_roots,
+        watch_filter=watch_filter,
+        debounce=debounce,
+        step=step,
+        stop_event=stop_event,
+        yield_on_timeout=yield_on_timeout,
+        raise_interrupt=raise_interrupt,
+        force_polling=force_polling,
+        poll_delay_ms=poll_delay_ms,
+        recursive=recursive,
+        ignore_permission_denied=ignore_permission_denied,
+    ):
+        if not changes:
+            yield set()
+            continue
+
+        relevant_changes = {
+            (change, changed_path)
+            for change, changed_path in changes
+            if _is_watch_change_relevant(
+                changed_path,
+                watched_files=watched_files,
+                watched_directories=watched_directories,
+            )
+        }
+        if relevant_changes:
+            yield relevant_changes
+
+
+def _watch_roots_for_targets(
+    watched_files: Iterable[Path],
+    watched_directories: Iterable[Path],
+) -> tuple[Path, ...]:
+    roots = [*watched_directories, *(path.parent for path in watched_files)]
+    return tuple(dict.fromkeys(path.resolve(strict=False) for path in roots))
+
+
+def _is_watch_change_relevant(
+    changed_path: str,
+    *,
+    watched_files: Iterable[Path],
+    watched_directories: Iterable[Path],
+) -> bool:
+    candidate = Path(changed_path).resolve(strict=False)
+    if any(candidate == path for path in watched_files):
+        return True
+    return any(is_within_root(candidate, directory) for directory in watched_directories)
+
+
 def _copy_config_value(value: object) -> object:
     if isinstance(value, Mapping):
         return _copy_mapping(cast(Mapping[str, object], value))
@@ -2117,3 +2339,22 @@ def _load_diskcache_cache_class() -> type[Any]:
         ) from error
 
     return cast(type[Any], cache_class)
+
+
+def _load_watchfiles_watch() -> Callable[..., Iterator[WatchChanges]]:
+    try:
+        module = import_module("watchfiles")
+    except ModuleNotFoundError as error:
+        raise CorylOptionalDependencyError(
+            "File watching requires the optional 'watchfiles' dependency. "
+            "Install it with 'pip install coryl[watch]'."
+        ) from error
+
+    try:
+        watch = module.watch
+    except AttributeError as error:  # pragma: no cover - defensive
+        raise CorylOptionalDependencyError(
+            "The installed 'watchfiles' package does not expose watch()."
+        ) from error
+
+    return cast(Callable[..., Iterator[WatchChanges]], watch)

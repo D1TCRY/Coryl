@@ -146,6 +146,27 @@ Supported helpers:
 - `settings.override({...})`
 - `settings.apply_overrides([...])`
 
+## Watching for reloads
+
+Install the optional watch extra first:
+
+```bash
+pip install coryl[watch]
+```
+
+Then keep the reload loop explicit:
+
+```python
+def apply(config):
+    print("reloaded", config)
+
+
+for config in settings.watch_reload():
+    apply(config)
+```
+
+`settings.on_change(apply)` is available as a minimal callback wrapper around the same blocking loop. Coryl does not start daemon reload threads automatically.
+
 ## Required files
 
 Set `required=True` when every declared layer must exist.

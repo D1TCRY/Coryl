@@ -24,9 +24,11 @@ license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
 [project.optional-dependencies]
+diskcache = ["diskcache>=5"]
 lock = ["filelock>=3"]
 platform = ["platformdirs>=4"]
 pydantic = ["pydantic>=2", "pydantic-settings>=2"]
+watch = ["watchfiles>=0.21"]
 
 [build-system]
 requires = ["setuptools>=77.0.0", "wheel"]
