@@ -18,8 +18,9 @@ Coryl gives you one place to declare these resources, keeps them inside a safe r
 - Automatic creation of missing files and directories when desired
 - Built-in support for `.json`, `.toml`, `.yaml`, and `.yml`
 - Specialized APIs for `configs`, `caches`, and `assets`
+- Explicit read-only resources for mounted config, cache, and asset paths
 - Generic file and directory management when you do not need special behavior
-- Modern manifest loading from JSON, TOML, or YAML
+- Versioned manifest loading from JSON, TOML, or YAML with legacy compatibility
 - Compatibility helpers for older `FileManager`-style code
 
 ## Installation
@@ -161,6 +162,8 @@ Config resources provide:
 - `save(data)`
 - `update(...)`
 
+For layered container-style config, use `configs.layered(...)` with `secrets_dir=...`. Coryl loads the main config file first, then treats each file in `secrets_dir` as a final key/value override layer.
+
 Example:
 
 ```python
@@ -168,6 +171,18 @@ settings = app.configs.add("settings", "config/settings.yaml")
 
 settings.save({"theme": "light", "language": "en"})
 settings.update(language="it", timezone="Europe/Rome")
+
+print(settings.load())
+```
+
+Layered config example:
+
+```python
+settings = app.configs.layered(
+    "settings",
+    "config/settings.yaml",
+    secrets_dir="/run/secrets",
+)
 
 print(settings.load())
 ```
@@ -234,6 +249,12 @@ print(logo.path)
 print([path.name for path in all_svgs])
 ```
 
+For filesystem-backed package assets, use `assets.package(...)`. Package asset groups are read-only by default.
+
+```python
+assets = app.assets.package("templates", "myapp", "assets/templates")
+```
+
 ## Reading and Writing Files
 
 ### Generic Automatic Access
@@ -254,6 +275,18 @@ If the file extension is structured, Coryl reads and writes structured data auto
 Coryl writes managed files safely by default. Text, bytes, and structured data writes go through an atomic replacement flow: Coryl writes a temporary file in the destination directory, flushes it, and then replaces the target file.
 
 That means existing calls such as `resource.write_text(...)`, `resource.write_json(...)`, and `settings.save(...)` automatically use the safer behavior without changing your code.
+
+### Read-Only Resources
+
+Any file, directory, config, cache, or asset resource can be marked with `readonly=True`.
+
+```python
+settings = app.register_config("settings", "config/settings.toml", readonly=True)
+cache = app.register_cache("http_cache", ".cache/http", readonly=True)
+assets = app.assets.package("ui", "myapp", "assets/ui")
+```
+
+Read operations still work normally. Mutating operations such as writes, deletes, clears, updates, and write-mode opens raise `CorylReadOnlyResourceError` with a clear message.
 
 ### Optional File Locking
 
@@ -325,22 +358,28 @@ Supported manifest formats:
 - TOML
 - YAML
 
-Manifests use a single modern schema with a top-level `resources` mapping.
+### Modern Schema (Preferred)
+
+Modern manifests should declare `version = 2` and use a top-level `resources` mapping.
 
 JSON example:
 
 ```json
 {
+  "version": 2,
   "resources": {
     "settings": {
       "path": "config/settings.toml",
       "kind": "file",
-      "role": "config"
+      "role": "config",
+      "create": true,
+      "format": "toml"
     },
     "http_cache": {
       "path": ".cache/http",
       "kind": "directory",
-      "role": "cache"
+      "role": "cache",
+      "backend": "diskcache"
     },
     "ui": {
       "path": "assets/ui",
@@ -354,15 +393,20 @@ JSON example:
 TOML example:
 
 ```toml
+version = 2
+
 [resources.settings]
 path = "config/settings.toml"
 kind = "file"
 role = "config"
+create = true
+format = "toml"
 
 [resources.http_cache]
 path = ".cache/http"
 kind = "directory"
 role = "cache"
+backend = "diskcache"
 
 [resources.ui]
 path = "assets/ui"
@@ -373,20 +417,35 @@ role = "assets"
 YAML example:
 
 ```yaml
+version: 2
 resources:
   settings:
-    path: config/settings.yaml
+    path: config/settings.toml
     kind: file
     role: config
+    create: true
+    format: toml
   http_cache:
     path: .cache/http
     kind: directory
     role: cache
+    backend: diskcache
   ui:
     path: assets/ui
     kind: directory
     role: assets
 ```
+
+Supported optional resource fields:
+
+- `create`
+- `readonly`
+- `required`
+- `format`
+- `schema`
+- `backend`
+
+For now, `schema` is stored as plain string metadata. Coryl does not require a JSON Schema dependency for manifest loading or validation.
 
 Loading a manifest:
 
@@ -405,6 +464,19 @@ app.load_config()
 ```
 
 Note: `load_config()` is kept mainly for compatibility with the older design. It reloads the manifest, not an application config resource.
+
+### Legacy Schema (Compatibility)
+
+Older manifests using `paths.files` and `paths.directories` still load, but they are compatibility-only and the versioned `resources` schema above is preferred for new projects.
+
+```yaml
+paths:
+  files:
+    settings: config/settings.toml
+  directories:
+    cache: .cache/http
+    ui: assets/ui
+```
 
 ## Safety Model
 
@@ -430,8 +502,10 @@ Main entry points:
 - `register_file(name, path, ...)`
 - `register_directory(name, path, ...)`
 - `register_config(name, path, ...)`
+- `register_layered_config(name, path, ..., secrets_dir=None)`
 - `register_cache(name, path, ...)`
 - `register_assets(name, path, ...)`
+- `register_package_assets(name, package, relative_path=".", ...)`
 - `resource(name)`
 - `file(name)`
 - `directory(name)`
@@ -443,6 +517,7 @@ Main entry points:
 - `write_content(name, value)`
 - `load_manifest(path)`
 - `load_config()`
+- `audit_paths()`
 
 Namespaces:
 
@@ -479,6 +554,7 @@ Additional helpers:
 - `load()`
 - `save(data, atomic=True)`
 - `update(..., lock=False)`
+- `load_base()` on layered configs
 
 ### CacheResource
 
@@ -566,6 +642,28 @@ app.configs.get("settings").save({"language": "en"})
 app.caches.get("cache").remember("session.json", content={"token": "abc"})
 print(app.assets.get("assets").files("**/*"))
 ```
+
+### Example 5: Docker or Kubernetes Config
+
+```python
+from coryl import Coryl
+
+app = Coryl(root=".")
+
+settings = app.configs.layered(
+    "settings",
+    "config/settings.yaml",
+    readonly=True,
+    secrets_dir="/run/secrets",
+)
+
+certs = app.register_assets("certs", "mounted/certs", readonly=True)
+
+print(settings.load())
+print(certs.files("*.crt"))
+```
+
+This pattern works well with mounted config files under your app root, Docker secrets, Kubernetes secrets, and read-only volumes.
 
 ## Compatibility Notes
 

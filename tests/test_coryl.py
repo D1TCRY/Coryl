@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,9 +20,12 @@ from coryl import (
     CorylLockTimeoutError,
     CorylOptionalDependencyError,
     CorylPathError,
+    CorylReadOnlyResourceError,
     CorylUnsupportedFormatError,
     CorylUnsafePathError,
     CorylValidationError,
+    LayeredConfigResource,
+    MANIFEST_VERSION,
     ManifestFormatError,
     ResourceKindError,
     ResourceNotRegisteredError,
@@ -235,6 +240,52 @@ class CorylTests(unittest.TestCase):
         )
         self.assertEqual(settings.load()["timezone"], "Europe/Rome")
 
+    def test_layered_config_uses_secrets_dir_as_final_override(self) -> None:
+        settings_path = self.root / "config" / "settings.yaml"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
+            """
+theme: light
+token: base-token
+""".strip(),
+            encoding="utf-8",
+        )
+
+        secrets_dir = self.outside_root / "run" / "secrets"
+        secrets_dir.mkdir(parents=True, exist_ok=True)
+        (secrets_dir / "token").write_text("secret-token", encoding="utf-8")
+        (secrets_dir / "region").write_text("eu-west-1", encoding="utf-8")
+
+        manager = Coryl(self.root)
+        settings = manager.configs.layered(
+            "settings",
+            "config/settings.yaml",
+            secrets_dir=secrets_dir,
+        )
+
+        self.assertIsInstance(settings, LayeredConfigResource)
+        self.assertEqual(settings.load_base(), {"theme": "light", "token": "base-token"})
+        self.assertEqual(
+            settings.load(),
+            {"theme": "light", "token": "secret-token", "region": "eu-west-1"},
+        )
+
+    def test_readonly_config_cannot_save_or_update(self) -> None:
+        settings_path = self.root / "config" / "settings.yaml"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text("theme: light\n", encoding="utf-8")
+
+        manager = Coryl(self.root)
+        settings = manager.register_config("settings", "config/settings.yaml", readonly=True)
+
+        self.assertEqual(settings.load(), {"theme": "light"})
+
+        with self.assertRaises(CorylReadOnlyResourceError):
+            settings.save({"theme": "dark"})
+
+        with self.assertRaises(CorylReadOnlyResourceError):
+            settings.update(theme="dark")
+
     def test_config_update_with_lock_true_works(self) -> None:
         manager = Coryl(self.root)
         settings = manager.configs.add("settings", "config/settings.yaml")
@@ -297,6 +348,23 @@ class CorylTests(unittest.TestCase):
         self.assertEqual(report.read_text(), "original")
         self.assertEqual(self._temporary_files_for(report.path), [])
 
+    def test_readonly_file_cannot_write(self) -> None:
+        report_path = self.root / "reports" / "daily.txt"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("original", encoding="utf-8")
+
+        manager = Coryl(self.root)
+        report = manager.register_file("report", "reports/daily.txt", readonly=True)
+
+        self.assertTrue(report.readonly)
+        self.assertEqual(report.read_text(), "original")
+
+        with self.assertRaises(CorylReadOnlyResourceError) as caught:
+            report.write_text("updated")
+
+        self.assertIn("read-only", str(caught.exception))
+        self.assertIn("written", str(caught.exception))
+
     def test_config_resources_must_use_structured_files(self) -> None:
         manager = Coryl(self.root)
 
@@ -315,7 +383,7 @@ class CorylTests(unittest.TestCase):
                 with self.assertRaises(CorylValidationError):
                     manager.register(name, definition)
 
-    def test_legacy_manifest_schema_is_rejected(self) -> None:
+    def test_legacy_manifest_schema_still_works(self) -> None:
         manifest_path = self.root / "app.json"
         manifest_path.write_text(
             json.dumps(
@@ -329,8 +397,11 @@ class CorylTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaises(ManifestFormatError):
-            Coryl(self.root, manifest_path="app.json")
+        manager = Coryl(self.root, manifest_path="app.json")
+
+        self.assertTrue(manager.file("settings").path.is_file())
+        self.assertTrue(manager.directory("cache").path.is_dir())
+        self.assertEqual(manager.file("settings").role, "resource")
 
     def test_manifest_loading_uses_the_same_safe_resolver(self) -> None:
         manifest_path = self.root / "app.yaml"
@@ -352,15 +423,22 @@ resources:
         manifest_path = self.root / "app.toml"
         manifest_path.write_text(
             """
+version = 2
+
 [resources.settings]
 path = "config/settings.toml"
 kind = "file"
 role = "config"
+readonly = true
+required = true
+format = "toml"
+schema = "app.settings.v1"
 
 [resources.http_cache]
 path = ".cache/http"
 kind = "directory"
 role = "cache"
+backend = "diskcache"
 
 [resources.assets]
 path = "assets"
@@ -375,11 +453,18 @@ role = "assets"
         self.assertIsInstance(manager.configs.get("settings"), ConfigResource)
         self.assertIsInstance(manager.caches.get("http_cache"), CacheResource)
         self.assertIsInstance(manager.assets.get("assets"), AssetGroup)
+        self.assertEqual(manager.manifest["version"], MANIFEST_VERSION)
+        self.assertTrue(manager.resource("settings").readonly)
+        self.assertTrue(manager.resource("settings").required)
+        self.assertEqual(manager.resource("settings").declared_format, "toml")
+        self.assertEqual(manager.resource("settings").schema, "app.settings.v1")
+        self.assertEqual(manager.resource("http_cache").backend, "diskcache")
 
     def test_modern_manifest_schema_can_be_reloaded(self) -> None:
         manifest_path = self.root / "app.yaml"
         manifest_path.write_text(
             """
+version: 2
 resources:
   settings:
     path: config/settings.yaml
@@ -399,6 +484,7 @@ resources:
 
         manifest_path.write_text(
             """
+version: 2
 resources:
   settings:
     path: config/new-settings.yaml
@@ -412,6 +498,183 @@ resources:
         self.assertEqual(manager.settings_file_path.name, "new-settings.yaml")
         with self.assertRaises(AttributeError):
             _ = manager.assets_directory_path
+
+    def test_manifest_rejects_unsupported_version(self) -> None:
+        manifest_path = self.root / "app.yaml"
+        manifest_path.write_text(
+            """
+version: 3
+resources:
+  settings:
+    path: config/settings.yaml
+    kind: file
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ManifestFormatError) as caught:
+            Coryl(self.root, manifest_path="app.yaml")
+
+        self.assertIn("supports version 2", str(caught.exception))
+
+    def test_manifest_rejects_unknown_kind_with_clear_error(self) -> None:
+        manifest_path = self.root / "app.yaml"
+        manifest_path.write_text(
+            """
+version: 2
+resources:
+  socket:
+    path: runtime/socket
+    kind: socket
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(CorylInvalidResourceKindError) as caught:
+            Coryl(self.root, manifest_path="app.yaml")
+
+        self.assertIn("Resource 'socket' is invalid", str(caught.exception))
+        self.assertIn("either 'file' or 'directory'", str(caught.exception))
+
+    def test_manifest_rejects_incompatible_role_and_kind_with_clear_error(self) -> None:
+        manifest_path = self.root / "app.yaml"
+        manifest_path.write_text(
+            """
+version: 2
+resources:
+  http_cache:
+    path: .cache/http
+    kind: file
+    role: cache
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(CorylValidationError) as caught:
+            Coryl(self.root, manifest_path="app.yaml")
+
+        self.assertIn("Resource 'http_cache' is invalid", str(caught.exception))
+        self.assertIn("directories", str(caught.exception))
+
+    def test_manifest_rejects_duplicate_names_in_json(self) -> None:
+        manifest_path = self.root / "app.json"
+        manifest_path.write_text(
+            """
+{
+  "version": 2,
+  "resources": {
+    "settings": {
+      "path": "config/settings.toml",
+      "kind": "file"
+    },
+    "settings": {
+      "path": "config/other-settings.toml",
+      "kind": "file"
+    }
+  }
+}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ManifestFormatError) as caught:
+            Coryl(self.root, manifest_path="app.json")
+
+        self.assertIn("Duplicate key 'settings'", str(caught.exception))
+
+    def test_legacy_manifest_rejects_duplicate_names_across_sections(self) -> None:
+        manifest_path = self.root / "app.yaml"
+        manifest_path.write_text(
+            """
+paths:
+  files:
+    shared: config/settings.toml
+  directories:
+    shared: runtime/cache
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ManifestFormatError) as caught:
+            Coryl(self.root, manifest_path="app.yaml")
+
+        self.assertIn("duplicate resource names", str(caught.exception))
+        self.assertIn("'shared'", str(caught.exception))
+
+    def test_manifest_readonly_resource_blocks_writes(self) -> None:
+        settings_path = self.root / "config" / "settings.toml"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text('theme = "light"\n', encoding="utf-8")
+
+        manifest_path = self.root / "app.toml"
+        manifest_path.write_text(
+            """
+version = 2
+
+[resources.settings]
+path = "config/settings.toml"
+kind = "file"
+role = "config"
+readonly = true
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root, manifest_path="app.toml")
+
+        self.assertEqual(manager.configs.get("settings").load(), {"theme": "light"})
+        with self.assertRaises(CorylReadOnlyResourceError):
+            manager.configs.get("settings").save({"theme": "dark"})
+
+    def test_audit_paths_returns_expected_structure(self) -> None:
+        manifest_path = self.root / "app.yaml"
+        manifest_path.write_text(
+            """
+version: 2
+resources:
+  settings:
+    path: config/settings.toml
+    kind: file
+    role: config
+    create: true
+  http_cache:
+    path: .cache/http
+    kind: directory
+    role: cache
+    create: false
+    backend: diskcache
+  ui:
+    path: assets/ui
+    kind: directory
+    role: assets
+""".strip(),
+            encoding="utf-8",
+        )
+
+        app = Coryl(self.root, manifest_path="app.yaml")
+        audit = app.audit_paths()
+
+        self.assertEqual(audit["root"], str(self.root.resolve()))
+        self.assertEqual(
+            audit["resources"]["settings"],
+            {
+                "path": str((self.root / "config" / "settings.toml").resolve()),
+                "exists": True,
+                "kind": "file",
+                "role": "config",
+                "safe": True,
+            },
+        )
+        self.assertEqual(
+            audit["resources"]["http_cache"],
+            {
+                "path": str((self.root / ".cache" / "http").resolve()),
+                "exists": False,
+                "kind": "directory",
+                "role": "cache",
+                "safe": True,
+            },
+        )
 
     def test_cache_namespace_helpers(self) -> None:
         manager = Coryl(self.root)
@@ -429,6 +692,22 @@ resources:
         cache.clear()
         self.assertEqual(list(cache.iterdir()), [])
 
+    def test_readonly_cache_cannot_clear_or_delete(self) -> None:
+        cache_file = self.root / ".cache" / "http" / "users" / "42.json"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text('{"id": 42}', encoding="utf-8")
+
+        manager = Coryl(self.root)
+        cache = manager.register_cache("http_cache", ".cache/http", readonly=True)
+
+        self.assertEqual(cache.load("users", "42.json")["id"], 42)
+
+        with self.assertRaises(CorylReadOnlyResourceError):
+            cache.delete("users", "42.json")
+
+        with self.assertRaises(CorylReadOnlyResourceError):
+            cache.clear()
+
     def test_asset_namespace_helpers(self) -> None:
         manager = Coryl(self.root)
         assets = manager.assets.add("ui", "assets")
@@ -441,6 +720,33 @@ resources:
         self.assertEqual(assets.require("images", "logo.svg").path.name, "logo.svg")
         self.assertTrue(assets.require("icons", kind="directory").path.is_dir())
         self.assertEqual(len(assets.files("**/*.svg")), 2)
+
+    def test_package_assets_are_readonly_by_default(self) -> None:
+        package_name = "coryl_testpkg"
+        package_root = self.root / "package_src" / package_name
+        assets_root = package_root / "assets" / "icons"
+        assets_root.mkdir(parents=True, exist_ok=True)
+        (package_root / "__init__.py").write_text("", encoding="utf-8")
+        (assets_root / "logo.svg").write_text("<svg></svg>", encoding="utf-8")
+
+        sys.path.insert(0, str(package_root.parent))
+        importlib.invalidate_caches()
+        sys.modules.pop(package_name, None)
+        try:
+            manager = Coryl(self.root)
+            assets = manager.assets.package("pkg_assets", package_name, "assets")
+            logo = assets.require("icons", "logo.svg")
+
+            self.assertTrue(assets.readonly)
+            self.assertTrue(logo.readonly)
+            self.assertEqual(logo.read_text(), "<svg></svg>")
+
+            with self.assertRaises(CorylReadOnlyResourceError):
+                logo.write_text("<svg>changed</svg>")
+        finally:
+            sys.modules.pop(package_name, None)
+            importlib.invalidate_caches()
+            sys.path.remove(str(package_root.parent))
 
     def test_child_paths_cannot_escape_parent(self) -> None:
         manager = Coryl(

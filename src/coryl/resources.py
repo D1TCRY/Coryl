@@ -13,6 +13,7 @@ from ._io import _atomic_write_bytes, _atomic_write_text
 from ._locks import managed_lock
 from ._paths import is_within_root, resolve_managed_path, validate_managed_path_input
 from .exceptions import (
+    CorylReadOnlyResourceError,
     CorylValidationError,
     ResourceKindError,
     UnsafePathError,
@@ -34,13 +35,32 @@ class ResourceSpec:
     create: bool = True
     encoding: str = "utf-8"
     role: ResourceRole = "resource"
+    readonly: bool = False
+    required: bool = False
+    format: str | None = None
+    schema: str | None = None
+    backend: str | None = None
 
     def __post_init__(self) -> None:
         relative_path = validate_managed_path_input(self.relative_path)
+        if not isinstance(self.create, bool):
+            raise CorylValidationError("ResourceSpec.create must be a boolean.")
+        if not isinstance(self.readonly, bool):
+            raise CorylValidationError("ResourceSpec.readonly must be a boolean.")
+        if not isinstance(self.required, bool):
+            raise CorylValidationError("ResourceSpec.required must be a boolean.")
+        if not isinstance(self.encoding, str) or not self.encoding:
+            raise CorylValidationError("ResourceSpec.encoding must be a non-empty string.")
         if self.kind not in {"file", "directory"}:
             raise ResourceKindError("ResourceSpec.kind must be either 'file' or 'directory'.")
         if self.role not in {"resource", "config", "cache", "assets"}:
             raise CorylValidationError("ResourceSpec.role is invalid.")
+        if self.format is not None and not isinstance(self.format, str):
+            raise CorylValidationError("ResourceSpec.format must be a string when provided.")
+        if self.schema is not None and not isinstance(self.schema, str):
+            raise CorylValidationError("ResourceSpec.schema must be a string when provided.")
+        if self.backend is not None and not isinstance(self.backend, str):
+            raise CorylValidationError("ResourceSpec.backend must be a string when provided.")
         if self.role == "config" and self.kind != "file":
             raise CorylValidationError("Config resources must be files.")
         if self.role in {"cache", "assets"} and self.kind != "directory":
@@ -54,12 +74,22 @@ class ResourceSpec:
         *,
         create: bool = True,
         encoding: str = "utf-8",
+        readonly: bool = False,
+        required: bool = False,
+        format: str | None = None,
+        schema: str | None = None,
+        backend: str | None = None,
     ) -> "ResourceSpec":
         return cls(
             relative_path=Path(path),
             kind="file",
             create=create,
             encoding=encoding,
+            readonly=readonly,
+            required=required,
+            format=format,
+            schema=schema,
+            backend=backend,
         )
 
     @classmethod
@@ -69,12 +99,22 @@ class ResourceSpec:
         *,
         create: bool = True,
         encoding: str = "utf-8",
+        readonly: bool = False,
+        required: bool = False,
+        format: str | None = None,
+        schema: str | None = None,
+        backend: str | None = None,
     ) -> "ResourceSpec":
         return cls(
             relative_path=Path(path),
             kind="directory",
             create=create,
             encoding=encoding,
+            readonly=readonly,
+            required=required,
+            format=format,
+            schema=schema,
+            backend=backend,
         )
 
     @classmethod
@@ -84,6 +124,11 @@ class ResourceSpec:
         *,
         create: bool = True,
         encoding: str = "utf-8",
+        readonly: bool = False,
+        required: bool = False,
+        format: str | None = None,
+        schema: str | None = None,
+        backend: str | None = None,
     ) -> "ResourceSpec":
         return cls(
             relative_path=Path(path),
@@ -91,6 +136,11 @@ class ResourceSpec:
             create=create,
             encoding=encoding,
             role="config",
+            readonly=readonly,
+            required=required,
+            format=format,
+            schema=schema,
+            backend=backend,
         )
 
     @classmethod
@@ -100,6 +150,11 @@ class ResourceSpec:
         *,
         create: bool = True,
         encoding: str = "utf-8",
+        readonly: bool = False,
+        required: bool = False,
+        format: str | None = None,
+        schema: str | None = None,
+        backend: str | None = None,
     ) -> "ResourceSpec":
         return cls(
             relative_path=Path(path),
@@ -107,6 +162,11 @@ class ResourceSpec:
             create=create,
             encoding=encoding,
             role="cache",
+            readonly=readonly,
+            required=required,
+            format=format,
+            schema=schema,
+            backend=backend,
         )
 
     @classmethod
@@ -116,6 +176,11 @@ class ResourceSpec:
         *,
         create: bool = True,
         encoding: str = "utf-8",
+        readonly: bool = False,
+        required: bool = False,
+        format: str | None = None,
+        schema: str | None = None,
+        backend: str | None = None,
     ) -> "ResourceSpec":
         return cls(
             relative_path=Path(path),
@@ -123,6 +188,11 @@ class ResourceSpec:
             create=create,
             encoding=encoding,
             role="assets",
+            readonly=readonly,
+            required=required,
+            format=format,
+            schema=schema,
+            backend=backend,
         )
 
 
@@ -136,13 +206,32 @@ class Resource:
     create: bool = True
     encoding: str = "utf-8"
     role: ResourceRole = "resource"
+    readonly: bool = False
+    required: bool = False
+    declared_format: str | None = None
+    schema: str | None = None
+    backend: str | None = None
 
     def __post_init__(self) -> None:
         self.path = self.path.resolve(strict=False)
+        if not isinstance(self.create, bool):
+            raise CorylValidationError("Resource.create must be a boolean.")
+        if not isinstance(self.readonly, bool):
+            raise CorylValidationError("Resource.readonly must be a boolean.")
+        if not isinstance(self.required, bool):
+            raise CorylValidationError("Resource.required must be a boolean.")
+        if not isinstance(self.encoding, str) or not self.encoding:
+            raise CorylValidationError("Resource.encoding must be a non-empty string.")
         if self.kind not in {"file", "directory"}:
             raise ResourceKindError("Resource.kind must be either 'file' or 'directory'.")
         if self.role not in {"resource", "config", "cache", "assets"}:
             raise CorylValidationError("Resource.role is invalid.")
+        if self.declared_format is not None and not isinstance(self.declared_format, str):
+            raise CorylValidationError("Resource.declared_format must be a string when provided.")
+        if self.schema is not None and not isinstance(self.schema, str):
+            raise CorylValidationError("Resource.schema must be a string when provided.")
+        if self.backend is not None and not isinstance(self.backend, str):
+            raise CorylValidationError("Resource.backend must be a string when provided.")
         if self.role == "config" and self.kind != "file":
             raise CorylValidationError("Config resources must be files.")
         if self.role in {"cache", "assets"} and self.kind != "directory":
@@ -161,6 +250,9 @@ class Resource:
         return structured_format_for_path(self.path)
 
     def ensure(self) -> Path:
+        if self.path.exists():
+            return self.path
+        self._assert_writable("created")
         if self.kind == "directory":
             self.path.mkdir(parents=True, exist_ok=True)
             return self.path
@@ -181,6 +273,9 @@ class Resource:
     def open(self, *args: object, **kwargs: object) -> IO[str] | IO[bytes]:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+        mode = self._open_mode(args, kwargs)
+        if self._mode_writes(mode):
+            self._assert_writable("opened for writing")
         return self.path.open(*args, **kwargs)
 
     def read_text(self, *, encoding: str | None = None) -> str:
@@ -197,6 +292,7 @@ class Resource:
     ) -> Path:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+        self._assert_writable("written")
 
         actual_encoding = encoding or self.encoding
         if atomic:
@@ -214,6 +310,7 @@ class Resource:
     def write_bytes(self, content: bytes, *, atomic: bool = True) -> Path:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+        self._assert_writable("written")
 
         if atomic:
             return _atomic_write_bytes(self.path, content)
@@ -296,6 +393,7 @@ class Resource:
     def write(self, content: object) -> Path:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+        self._assert_writable("written")
 
         if self.format is not None:
             return self.write_data(content)
@@ -324,22 +422,26 @@ class Resource:
             create=create,
             encoding=self.encoding,
             role=role,
+            readonly=self.readonly,
         )
 
     def iterdir(self) -> Iterator[Path]:
         if self.kind != "directory":
             raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
-        self.ensure()
+        if not self.readonly:
+            self.ensure()
         return self.path.iterdir()
 
     def glob(self, pattern: str) -> list[Path]:
         if self.kind != "directory":
             raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
-        self.ensure()
+        if not self.readonly:
+            self.ensure()
         return sorted(self.path.glob(pattern))
 
     @contextmanager
     def lock(self, timeout: float | None = None) -> Iterator["Resource"]:
+        self._assert_writable("locked")
         with managed_lock(self.path, timeout=timeout):
             yield self
 
@@ -399,12 +501,31 @@ class Resource:
                 f"Resource '{self.name}' uses '{actual_format}', not '{expected_format}'."
             )
 
+        self._assert_writable("written")
         payload = dump_to_path(self.path, content)
         return self.write_text(payload, encoding=encoding, atomic=atomic)
 
     def _assert_inside(self, candidate: Path) -> None:
         if not is_within_root(candidate, self.path):
             raise UnsafePathError("Joined path escapes the directory resource root.")
+
+    def _assert_writable(self, operation: str) -> None:
+        if self.readonly:
+            raise CorylReadOnlyResourceError(
+                f"Resource '{self.name}' is read-only and cannot be {operation}."
+            )
+
+    @staticmethod
+    def _open_mode(args: tuple[object, ...], kwargs: Mapping[str, object]) -> str:
+        if "mode" in kwargs and isinstance(kwargs["mode"], str):
+            return kwargs["mode"]
+        if args and isinstance(args[0], str):
+            return args[0]
+        return "r"
+
+    @staticmethod
+    def _mode_writes(mode: str) -> bool:
+        return any(flag in mode for flag in ("w", "a", "x", "+"))
 
     def _resolve_child_path(self, *parts: str | Path) -> Path:
         return resolve_managed_path(
@@ -454,6 +575,72 @@ class ConfigResource(Resource):
         return apply_update()
 
 
+@dataclass(slots=True)
+class LayeredConfigResource(ConfigResource):
+    """Configuration resource with simple secrets-directory overrides."""
+
+    secrets_dir: Path | None = None
+
+    def __post_init__(self) -> None:
+        ConfigResource.__post_init__(self)
+        if self.secrets_dir is not None:
+            self.secrets_dir = Path(self.secrets_dir).resolve(strict=False)
+
+    def load(self, *, default: object = MISSING) -> object:
+        base_document = self.load_base(default=default)
+        secret_overrides = self._load_secret_overrides()
+        if not secret_overrides:
+            return base_document
+        if not isinstance(base_document, Mapping):
+            raise TypeError(
+                "LayeredConfigResource.load() requires a mapping-based document when secrets_dir "
+                "is used."
+            )
+        merged = dict(base_document)
+        merged.update(secret_overrides)
+        return merged
+
+    def load_base(self, *, default: object = MISSING) -> object:
+        return ConfigResource.load(self, default=default)
+
+    def update(
+        self,
+        *mappings: Mapping[str, object],
+        lock: bool = False,
+        **changes: object,
+    ) -> dict[str, object]:
+        def apply_update() -> dict[str, object]:
+            current = self.load_base(default={})
+            if not isinstance(current, Mapping):
+                raise TypeError("ConfigResource.update() requires a mapping-based document.")
+
+            merged = dict(current)
+            for mapping in mappings:
+                merged.update(mapping)
+            merged.update(changes)
+            self.save(merged)
+            return merged
+
+        if lock:
+            with self.lock():
+                return apply_update()
+        return apply_update()
+
+    def _load_secret_overrides(self) -> dict[str, str]:
+        if self.secrets_dir is None:
+            return {}
+        if not self.secrets_dir.exists():
+            return {}
+        if not self.secrets_dir.is_dir():
+            raise CorylValidationError("Layered config secrets_dir must point to a directory.")
+
+        overrides: dict[str, str] = {}
+        for candidate in sorted(self.secrets_dir.iterdir()):
+            if candidate.is_file():
+                overrides[candidate.name] = candidate.read_text(encoding=self.encoding)
+        return overrides
+
+
 class CacheResource(Resource):
     """Managed cache directory with file-oriented helpers."""
 
@@ -481,6 +668,7 @@ class CacheResource(Resource):
         return self.file(*parts).content(default=default)
 
     def delete(self, *parts: str | Path, missing_ok: bool = True) -> None:
+        self._assert_writable("deleted")
         target = self._resolve_child_path(*parts)
 
         if not target.exists():
@@ -494,6 +682,7 @@ class CacheResource(Resource):
             target.unlink()
 
     def clear(self) -> None:
+        self._assert_writable("cleared")
         self.ensure()
         for child in list(self.path.iterdir()):
             self._assert_inside(child.resolve(strict=False))
@@ -533,6 +722,11 @@ def create_resource(
     create: bool = True,
     encoding: str = "utf-8",
     role: ResourceRole = "resource",
+    readonly: bool = False,
+    required: bool = False,
+    declared_format: str | None = None,
+    schema: str | None = None,
+    backend: str | None = None,
 ) -> Resource:
     resource_class: type[Resource]
     if role == "config":
@@ -551,4 +745,9 @@ def create_resource(
         create=create,
         encoding=encoding,
         role=role,
+        readonly=readonly,
+        required=required,
+        declared_format=declared_format,
+        schema=schema,
+        backend=backend,
     )

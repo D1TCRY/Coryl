@@ -37,6 +37,10 @@ class CorylLockTimeoutError(CorylError, TimeoutError):
     """Raised when a lock cannot be acquired before the configured timeout."""
 
 
+class CorylReadOnlyResourceError(CorylError, PermissionError):
+    """Raised when a mutation is attempted on a read-only resource."""
+
+
 class ResourceConflictError(CorylValidationError):
     """Raised when registering a resource name twice without replacement."""
 
@@ -49,3 +53,4 @@ ResourceNotRegisteredError = CorylResourceNotFoundError
 ResourceKindError = CorylInvalidResourceKindError
 UnsafePathError = CorylUnsafePathError
 UnsupportedFormatError = CorylUnsupportedFormatError
+ReadOnlyResourceError = CorylReadOnlyResourceError

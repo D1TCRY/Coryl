@@ -18,19 +18,19 @@ This document captures the current implementation state of Coryl and proposes a 
 ### Current Implementations
 
 - `Coryl / ResourceManager`
-  Manages a root directory, registers resources, exposes compatibility helpers, typed namespaces (`configs`, `caches`, `assets`), and manifest loading.
+  Manages a root directory, registers resources, exposes compatibility helpers, typed namespaces (`configs`, `caches`, `assets`), manifest loading, layered config helpers, and filesystem-backed package assets.
 - `Resource`
-  Generic file or directory abstraction with safe child-path handling plus text, bytes, and structured data helpers.
+  Generic file or directory abstraction with safe child-path handling plus text, bytes, structured data helpers, and explicit read-only enforcement.
 - `ConfigResource`
-  Structured file resource with `load()`, `save()`, and shallow `update()` support.
+  Structured file resource with `load()`, `save()`, and shallow `update()` support, plus a layered variant for `secrets_dir` overrides.
 - `CacheResource`
-  Managed directory for cached files with `remember()`, `load()`, `delete()`, and `clear()`.
+  Managed directory for cached files with `remember()`, `load()`, `delete()`, and `clear()`, including read-only protection.
 - `AssetGroup`
-  Managed directory for asset lookup, traversal, and existence checks.
+  Managed directory for asset lookup, traversal, and existence checks, with package-backed assets defaulting to read-only.
 - `ResourceSpec`
   Immutable declaration object with typed constructors for generic resources, config files, cache directories, and asset directories.
 - `Manifest loading`
-  Modern-schema only. Manifests must provide a top-level `resources` mapping and can be written in JSON, TOML, or YAML.
+  Versioned modern manifests use `version = 2` with a top-level `resources` mapping, while legacy `paths.files` / `paths.directories` manifests remain supported for compatibility.
 - `Path resolution / safety checks`
   Paths are resolved relative to `root`, rejected if they escape the root, and directory child resources are constrained to stay inside the parent directory.
 - `JSON / TOML / YAML support`
@@ -41,7 +41,9 @@ This document captures the current implementation state of Coryl and proposes a 
 - The public API is already small and practical.
 - The package remains lightweight; current mandatory dependencies are limited to `PyYAML` and a Python-version-specific `tomli` fallback.
 - FileManager-style helpers still exist and should be preserved where feasible.
-- Manifest compatibility has intentionally been simplified to the modern schema only.
+- Modern manifests are the preferred path, while the legacy manifest shape remains available as a compatibility layer.
+- Layered config currently focuses on a simple base-file-plus-secrets-directory model.
+- Package assets currently target filesystem-backed packages without adding extra dependencies.
 
 ## Roadmap Principles
 
@@ -65,9 +67,9 @@ This document captures the current implementation state of Coryl and proposes a 
 
 ## Phase 3: Package Assets
 
-- Add first-class support for assets shipped inside installed Python packages.
+- Expand package-asset support beyond the current filesystem-backed helper.
 - Prefer standard library mechanisms such as `importlib.resources`.
-- Keep the current filesystem API intact while adding a small, clear access layer for packaged resources.
+- Keep the current filesystem API intact while broadening support for packaged resources.
 
 ## Phase 4: Typed Config
 
@@ -77,7 +79,7 @@ This document captures the current implementation state of Coryl and proposes a 
 
 ## Phase 5: Layered Config
 
-- Support layered configuration from multiple sources such as defaults, local overrides, environment-specific files, and user overrides.
+- Extend the current `secrets_dir` layering helper to additional sources such as defaults, local overrides, environment-specific files, and user overrides.
 - Define explicit merge semantics and keep them predictable.
 - Keep the initial implementation file-based before considering environment-variable expansion.
 
