@@ -16,9 +16,10 @@ from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath
 from typing import IO, Any, Callable, Literal, TypeVar, cast, overload
 
+from ._fs import FsspecFS, LocalFS
 from ._io import _atomic_write_bytes, _atomic_write_text
 from ._locks import managed_lock
-from ._paths import is_within_root, resolve_managed_path, validate_managed_path_input
+from ._paths import ManagedPath, is_within_root, validate_managed_path_input
 from .exceptions import (
     CorylOptionalDependencyError,
     CorylPathError,
@@ -271,8 +272,9 @@ class Resource:
     """Concrete resource bound to a resolved path."""
 
     name: str
-    path: Path
+    path: ManagedPath
     kind: ResourceKind
+    filesystem: LocalFS | FsspecFS = field(repr=False, compare=False)
     create: bool = True
     encoding: str = "utf-8"
     role: ResourceRole = "resource"
@@ -282,11 +284,19 @@ class Resource:
     schema: str | None = None
     backend: str | None = None
     typed_schema: type[object] | None = None
-    managed_root: Path | None = None
+    managed_root: ManagedPath | None = None
     root_name: str = "root"
 
     def __post_init__(self) -> None:
-        self.path = self.path.resolve(strict=False)
+        if self.filesystem.kind == "local":
+            self.path = Path(self.path).resolve(strict=False)
+        else:
+            self.path = self.filesystem.resolve(
+                self.path,
+                base_path=self.filesystem.root_path,
+                allowed_root=self.filesystem.root_path,
+                allow_absolute=True,
+            )
         if not isinstance(self.create, bool):
             raise CorylValidationError("Resource.create must be a boolean.")
         if not isinstance(self.readonly, bool):
@@ -308,7 +318,15 @@ class Resource:
         if self.typed_schema is not None and not isinstance(self.typed_schema, type):
             raise CorylValidationError("Resource.typed_schema must be a type when provided.")
         if self.managed_root is not None:
-            self.managed_root = Path(self.managed_root).resolve(strict=False)
+            if self.filesystem.kind == "local":
+                self.managed_root = Path(self.managed_root).resolve(strict=False)
+            else:
+                self.managed_root = self.filesystem.resolve(
+                    self.managed_root,
+                    base_path=self.filesystem.root_path,
+                    allowed_root=self.filesystem.root_path,
+                    allow_absolute=True,
+                )
         if self.role == "config" and self.kind != "file":
             raise CorylValidationError("Config resources must be files.")
         if self.role in {"cache", "assets"} and self.kind != "directory":
@@ -319,48 +337,56 @@ class Resource:
             self.ensure()
 
     def __fspath__(self) -> str:
-        return str(self.path)
+        return self.display_path
 
     def __str__(self) -> str:
-        return str(self.path)
+        return self.display_path
+
+    @property
+    def display_path(self) -> str:
+        return self.filesystem.display_path(self.path)
 
     @property
     def format(self) -> str | None:
         return structured_format_for_path(self.path)
 
-    def ensure(self) -> Path:
-        if self.path.exists():
+    def ensure(self) -> ManagedPath:
+        if self.exists():
             return self.path
         self._assert_writable("created")
         if self.kind == "directory":
-            self.path.mkdir(parents=True, exist_ok=True)
+            self.filesystem.mkdir(self.path, parents=True, exist_ok=True)
             return self.path
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.touch(exist_ok=True)
+        self.filesystem.mkdir(self.path.parent, parents=True, exist_ok=True)
+        self.filesystem.write_bytes(self.path, b"")
         return self.path
 
     def exists(self) -> bool:
-        return self.path.exists()
+        return self.filesystem.exists(self.path)
 
     def is_file(self) -> bool:
-        return self.path.is_file()
+        return self.filesystem.is_file(self.path)
 
     def is_dir(self) -> bool:
-        return self.path.is_dir()
+        return self.filesystem.is_dir(self.path)
 
     def open(self, *args: object, **kwargs: object) -> IO[str] | IO[bytes]:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+        if self.filesystem.kind != "local":
+            raise CorylValidationError(
+                "Resource.open() is only supported for the default local filesystem."
+            )
         mode = self._open_mode(args, kwargs)
         if self._mode_writes(mode):
             self._assert_writable("opened for writing")
-        return self.path.open(*args, **kwargs)
+        return Path(self.path).open(*args, **kwargs)
 
     def read_text(self, *, encoding: str | None = None) -> str:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
-        return self.path.read_text(encoding=encoding or self.encoding)
+        return self.filesystem.read_text(self.path, encoding=encoding or self.encoding)
 
     def write_text(
         self,
@@ -368,35 +394,29 @@ class Resource:
         *,
         encoding: str | None = None,
         atomic: bool = True,
-    ) -> Path:
+    ) -> ManagedPath:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
         self._assert_writable("written")
 
         actual_encoding = encoding or self.encoding
-        if atomic:
+        if atomic and self.filesystem.supports_atomic_writes:
             return _atomic_write_text(self.path, content, encoding=actual_encoding)
-
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(content, encoding=actual_encoding)
-        return self.path
+        return self.filesystem.write_text(self.path, content, encoding=actual_encoding)
 
     def read_bytes(self) -> bytes:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
-        return self.path.read_bytes()
+        return self.filesystem.read_bytes(self.path)
 
-    def write_bytes(self, content: bytes, *, atomic: bool = True) -> Path:
+    def write_bytes(self, content: bytes, *, atomic: bool = True) -> ManagedPath:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
         self._assert_writable("written")
 
-        if atomic:
+        if atomic and self.filesystem.supports_atomic_writes:
             return _atomic_write_bytes(self.path, content)
-
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_bytes(content)
-        return self.path
+        return self.filesystem.write_bytes(self.path, content)
 
     def read_data(self, *, default: object = MISSING, encoding: str | None = None) -> object:
         return self._read_structured(default=default, encoding=encoding)
@@ -407,7 +427,7 @@ class Resource:
         *,
         encoding: str | None = None,
         atomic: bool = True,
-    ) -> Path:
+    ) -> ManagedPath:
         return self._write_structured(content, encoding=encoding, atomic=atomic)
 
     def read_json(self, *, default: object = MISSING, encoding: str | None = None) -> object:
@@ -419,7 +439,7 @@ class Resource:
         *,
         encoding: str | None = None,
         atomic: bool = True,
-    ) -> Path:
+    ) -> ManagedPath:
         return self._write_structured(
             content,
             expected_format="json",
@@ -436,7 +456,7 @@ class Resource:
         *,
         encoding: str | None = None,
         atomic: bool = True,
-    ) -> Path:
+    ) -> ManagedPath:
         return self._write_structured(
             content,
             expected_format="toml",
@@ -453,7 +473,7 @@ class Resource:
         *,
         encoding: str | None = None,
         atomic: bool = True,
-    ) -> Path:
+    ) -> ManagedPath:
         return self._write_structured(
             content,
             expected_format="yaml",
@@ -469,7 +489,7 @@ class Resource:
                 return default
             raise
 
-    def write(self, content: object) -> Path:
+    def write(self, content: object) -> ManagedPath:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
         self._assert_writable("written")
@@ -505,21 +525,22 @@ class Resource:
             backend=self.backend,
             managed_root=self.path,
             root_name=self.root_name,
+            filesystem=self.filesystem,
         )
 
-    def iterdir(self) -> Iterator[Path]:
+    def iterdir(self) -> Iterator[ManagedPath]:
         if self.kind != "directory":
             raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
         if not self.readonly:
             self.ensure()
-        return self.path.iterdir()
+        return iter(self.glob("*"))
 
-    def glob(self, pattern: str) -> list[Path]:
+    def glob(self, pattern: str) -> list[ManagedPath]:
         if self.kind != "directory":
             raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
         if not self.readonly:
             self.ensure()
-        return sorted(self.path.glob(pattern))
+        return self.filesystem.glob(self._glob_pattern(pattern))
 
     def watch(
         self,
@@ -535,12 +556,16 @@ class Resource:
         recursive: bool | None = None,
         ignore_permission_denied: bool | None = None,
     ) -> Iterator[WatchChanges]:
+        if not self.filesystem.supports_watch:
+            raise CorylValidationError(
+                "Resource.watch() is only supported for the default local filesystem."
+            )
         watched_files: tuple[Path, ...] = ()
         watched_directories: tuple[Path, ...] = ()
         if self.kind == "file":
-            watched_files = (self.path,)
+            watched_files = (Path(self.path),)
         else:
-            watched_directories = (self.path,)
+            watched_directories = (Path(self.path),)
 
         effective_recursive = self.kind == "directory" if recursive is None else recursive
         yield from _watch_relevant_paths(
@@ -560,8 +585,12 @@ class Resource:
 
     @contextmanager
     def lock(self, timeout: float | None = None) -> Iterator["Resource"]:
+        if not self.filesystem.supports_locks:
+            raise CorylValidationError(
+                "Resource.lock() is only supported for the default local filesystem."
+            )
         self._assert_writable("locked")
-        with managed_lock(self.path, timeout=timeout):
+        with managed_lock(Path(self.path), timeout=timeout):
             yield self
 
     def _auto_read(self) -> object:
@@ -605,7 +634,7 @@ class Resource:
         expected_format: str | None = None,
         encoding: str | None = None,
         atomic: bool = True,
-    ) -> Path:
+    ) -> ManagedPath:
         if self.kind != "file":
             raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
 
@@ -646,12 +675,21 @@ class Resource:
     def _mode_writes(mode: str) -> bool:
         return any(flag in mode for flag in ("w", "a", "x", "+"))
 
-    def _resolve_child_path(self, *parts: str | Path) -> Path:
-        return resolve_managed_path(
+    def _resolve_child_path(self, *parts: str | Path) -> ManagedPath:
+        return self.filesystem.resolve(
             Path(*parts),
             base_path=self.path,
             allowed_root=self.path,
         )
+
+    def _glob_pattern(self, pattern: str) -> str:
+        normalized_pattern = pattern.replace("\\", "/")
+        relative_root = self.path.relative_to(self.filesystem.root_path).as_posix()
+        if relative_root in {"", "."}:
+            return normalized_pattern
+        if normalized_pattern in {"", "."}:
+            return relative_root
+        return f"{relative_root.rstrip('/')}/{normalized_pattern.lstrip('/')}"
 
 
 @dataclass(slots=True)
@@ -715,10 +753,10 @@ class ConfigResource(Resource):
                 f"Configuration validation failed for resource '{self.name}': {error}"
             ) from error
 
-    def save(self, content: object, *, atomic: bool = True) -> Path:
+    def save(self, content: object, *, atomic: bool = True) -> ManagedPath:
         return self.write_data(content, atomic=atomic)
 
-    def save_typed(self, instance: object, *, atomic: bool = True) -> Path:
+    def save_typed(self, instance: object, *, atomic: bool = True) -> ManagedPath:
         _load_pydantic_module()
         if not hasattr(instance, "model_dump"):
             raise TypeError(
@@ -913,6 +951,10 @@ class ConfigResource(Resource):
         ignore_permission_denied: bool | None = None,
         default: object = MISSING,
     ) -> Iterator[object]:
+        if not self.filesystem.supports_watch:
+            raise CorylValidationError(
+                "ConfigResource.watch_reload() is only supported for the default local filesystem."
+            )
         for changes in _watch_relevant_paths(
             files=self._watch_file_paths(),
             directories=self._watch_directory_paths(),
@@ -932,7 +974,7 @@ class ConfigResource(Resource):
             yield self.load(default=default)
 
     def _watch_file_paths(self) -> tuple[Path, ...]:
-        return (self.path,)
+        return (Path(self.path),)
 
     def _watch_directory_paths(self) -> tuple[Path, ...]:
         return ()
@@ -950,6 +992,10 @@ class LayeredConfigResource(ConfigResource):
 
     def __post_init__(self) -> None:
         ConfigResource.__post_init__(self)
+        if self.filesystem.kind != "local":
+            raise CorylValidationError(
+                "LayeredConfigResource currently requires the default local filesystem."
+            )
         self.layer_paths = tuple(
             Path(path).resolve(strict=False) for path in (self.layer_paths or (self.path,))
         )
@@ -1197,7 +1243,7 @@ class CacheResource(Resource):
             raise TypeError("Cache directory creation returned the wrong resource type.")
         return resource
 
-    def set(self, key: str | Path, value: object, ttl: float | None = None) -> Path:
+    def set(self, key: str | Path, value: object, ttl: float | None = None) -> ManagedPath:
         resource = self._cache_file(key, create=True)
         return self._store_cache_value(resource, value, ttl=ttl)
 
@@ -1207,7 +1253,7 @@ class CacheResource(Resource):
 
     def has(self, key: str | Path) -> bool:
         resource = self._cache_file(key)
-        if not resource.exists() or resource.path.is_dir():
+        if not resource.exists() or resource.is_dir():
             self._cleanup_stale_index_entry(resource.path)
             return False
 
@@ -1297,11 +1343,11 @@ class CacheResource(Resource):
         target = self._resolve_child_path(*parts)
         self._assert_cache_target(target)
 
-        if not target.exists():
+        if not self.filesystem.exists(target):
             self._cleanup_stale_index_entry(target)
             if missing_ok:
                 return
-            raise FileNotFoundError(target)
+            raise FileNotFoundError(self.filesystem.display_path(target))
 
         self._remove_target(target)
 
@@ -1313,14 +1359,14 @@ class CacheResource(Resource):
 
         for entry_key, metadata in list(index.items()):
             target = self._cache_entry_path(entry_key)
-            if not target.exists() or target.is_dir():
+            if not self.filesystem.exists(target) or self.filesystem.is_dir(target):
                 del index[entry_key]
                 dirty = True
                 continue
             if not self._is_cache_entry_expired(metadata):
                 continue
 
-            target.unlink()
+            self.filesystem.remove(target)
             del index[entry_key]
             removed += 1
             dirty = True
@@ -1332,32 +1378,33 @@ class CacheResource(Resource):
     def clear(self) -> None:
         self._assert_writable("cleared")
         self.ensure()
-        for child in list(self.path.iterdir()):
-            self._assert_inside(child.resolve(strict=False))
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
+        for child in list(self.glob("*")):
+            self._assert_inside(child)
+            self.filesystem.remove(child)
 
     def _cache_file(self, *parts: str | Path, create: bool = False) -> Resource:
         resource = self.file(*parts, create=create)
         self._assert_cache_target(resource.path)
         return resource
 
-    def _assert_cache_target(self, candidate: Path) -> None:
+    def _assert_cache_target(self, candidate: ManagedPath) -> None:
         relative = candidate.relative_to(self.path)
         if relative.parts and relative.parts[0] == self._INDEX_FILE_NAME:
             raise CorylValidationError(
                 f"Cache key '{relative.as_posix()}' is reserved for Coryl metadata."
             )
 
-    def _cache_entry_key(self, target: Path | Resource) -> str:
+    def _cache_entry_key(self, target: ManagedPath | Resource) -> str:
         candidate = target.path if isinstance(target, Resource) else target
         self._assert_cache_target(candidate)
         return candidate.relative_to(self.path).as_posix()
 
-    def _cache_entry_path(self, entry_key: str) -> Path:
-        return self.path.joinpath(*PurePosixPath(entry_key).parts).resolve(strict=False)
+    def _cache_entry_path(self, entry_key: str) -> ManagedPath:
+        return self.filesystem.resolve(
+            PurePosixPath(entry_key),
+            base_path=self.path,
+            allowed_root=self.path,
+        )
 
     def _index_resource(self, *, create: bool = False) -> Resource:
         return self.file(self._INDEX_FILE_NAME, create=create)
@@ -1417,7 +1464,7 @@ class CacheResource(Resource):
         if not index:
             index_resource = self._index_resource()
             if index_resource.exists():
-                index_resource.path.unlink()
+                self.filesystem.remove(index_resource.path)
             return
 
         payload = {
@@ -1433,8 +1480,8 @@ class CacheResource(Resource):
         *,
         ttl: float | None,
         mode: str | None = None,
-        writer: Callable[[Resource, object], Path] | None = None,
-    ) -> Path:
+        writer: Callable[[Resource, object], ManagedPath] | None = None,
+    ) -> ManagedPath:
         self._assert_writable("written")
 
         if writer is None:
@@ -1476,7 +1523,7 @@ class CacheResource(Resource):
         default: object = MISSING,
         reader: Callable[[Resource], object] | None = None,
     ) -> object:
-        if not resource.exists() or resource.path.is_dir():
+        if not resource.exists() or resource.is_dir():
             self._cleanup_stale_index_entry(resource.path)
             return default
 
@@ -1555,12 +1602,12 @@ class CacheResource(Resource):
             return False
         return time.time() >= float(expires_at)
 
-    def _cleanup_expired_entry(self, target: Path) -> None:
+    def _cleanup_expired_entry(self, target: ManagedPath) -> None:
         if self.readonly:
             return
         self._remove_target(target)
 
-    def _cleanup_stale_index_entry(self, target: Path) -> None:
+    def _cleanup_stale_index_entry(self, target: ManagedPath) -> None:
         if self.readonly:
             return
 
@@ -1568,22 +1615,19 @@ class CacheResource(Resource):
         if self._remove_index_entries(target, index):
             self._save_cache_index(index)
 
-    def _remove_target(self, target: Path) -> None:
+    def _remove_target(self, target: ManagedPath) -> None:
         index = self._load_cache_index()
         dirty = self._remove_index_entries(target, index)
 
-        if target.exists():
-            if target.is_dir():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
+        if self.filesystem.exists(target):
+            self.filesystem.remove(target)
 
         if dirty:
             self._save_cache_index(index)
 
     def _remove_index_entries(
         self,
-        target: Path,
+        target: ManagedPath,
         index: dict[str, dict[str, object]],
     ) -> bool:
         relative = target.relative_to(self.path).as_posix()
@@ -1601,6 +1645,10 @@ class DiskCacheResource(CacheResource):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.filesystem.kind != "local":
+            raise CorylValidationError(
+                "The diskcache backend is only supported on the default local filesystem."
+            )
         _load_diskcache_cache_class()
         self._raw_cache: Any | None = None
 
@@ -1611,7 +1659,7 @@ class DiskCacheResource(CacheResource):
             self._raw_cache = cache_class(str(self.path))
         return self._raw_cache
 
-    def set(self, key: object, value: object, ttl: float | None = None) -> Path:
+    def set(self, key: object, value: object, ttl: float | None = None) -> ManagedPath:
         self._assert_writable("written")
         normalized_ttl = self._normalize_ttl(ttl)
         self.raw.set(self._normalize_diskcache_key(key), value, expire=normalized_ttl)
@@ -1730,11 +1778,11 @@ class AssetGroup(Resource):
     def require(self, *parts: str | Path, kind: ResourceKind | None = None) -> Resource:
         resource = self.joinpath(*parts, kind=kind, create=False)
         if not resource.exists():
-            raise FileNotFoundError(resource.path)
+            raise FileNotFoundError(resource.display_path)
         return resource
 
-    def files(self, pattern: str = "**/*") -> list[Path]:
-        return [path for path in self.glob(pattern) if path.is_file()]
+    def files(self, pattern: str = "**/*") -> list[ManagedPath]:
+        return [path for path in self.glob(pattern) if self.filesystem.is_file(path)]
 
 
 @dataclass(slots=True)
@@ -2044,8 +2092,9 @@ def _iter_traversable_files(
 def create_resource(
     *,
     name: str,
-    path: Path,
+    path: ManagedPath,
     kind: ResourceKind,
+    filesystem: LocalFS | FsspecFS,
     create: bool = True,
     encoding: str = "utf-8",
     role: ResourceRole = "resource",
@@ -2056,7 +2105,7 @@ def create_resource(
     backend: str | None = None,
     typed_schema: type[object] | None = None,
     version: int | None = None,
-    managed_root: Path | None = None,
+    managed_root: ManagedPath | None = None,
     root_name: str = "root",
 ) -> Resource:
     resource_class: type[Resource]
@@ -2073,6 +2122,7 @@ def create_resource(
         "name": name,
         "path": path,
         "kind": kind,
+        "filesystem": filesystem,
         "create": create,
         "encoding": encoding,
         "role": role,

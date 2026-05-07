@@ -42,6 +42,12 @@ Optional DiskCache backend for heavier persistent caches:
 pip install coryl[diskcache]
 ```
 
+Optional advanced fsspec-backed filesystems:
+
+```bash
+pip install coryl[fsspec]
+```
+
 Optional platform-aware app roots:
 
 ```bash
@@ -127,6 +133,44 @@ app = Coryl(root="/path/to/project")
 
 Coryl refuses to register or create managed resources outside that root.
 Registration paths are expected to be relative to `root`, so absolute paths are rejected by default and traversal segments such as `..` are not accepted.
+
+### Advanced Filesystems
+
+Most users should keep the default local `pathlib` behavior:
+
+```python
+app = Coryl(root=".")
+```
+
+If you need an `fsspec` backend for a local or remote filesystem, install the optional extra and opt in explicitly:
+
+```bash
+pip install coryl[fsspec]
+```
+
+```python
+from coryl import Coryl
+
+app = Coryl.with_fs(root="memory://app", protocol="memory")
+# or:
+app = Coryl(root="memory://app", filesystem="fsspec")
+```
+
+This is intentionally an advanced, conservative feature in the first release. The default local flow is still the recommended path, and you do not need `fsspec` for normal Coryl usage.
+
+Current fsspec support is focused on basic file and directory operations:
+
+- file registration and directory registration
+- text and binary reads and writes
+- JSON, TOML, and YAML reads and writes through Coryl's normal resource helpers
+- directory creation and simple glob-based listing
+
+Current limitations:
+
+- `resource.path` stays a real `Path` for the default local filesystem, but fsspec-backed resources expose logical managed paths rather than a local on-disk path
+- path confinement still applies logically inside the configured root, but backend-specific escape rules are not exhaustively modeled in this first version
+- atomic writes are only guaranteed on the default local filesystem; fsspec backends may fall back to direct writes
+- locks, file watching, layered config helpers, and the `diskcache` backend currently require the default local filesystem
 
 ### Installed Applications
 
@@ -503,9 +547,11 @@ If the file extension is structured, Coryl reads and writes structured data auto
 
 ### Safe Writes
 
-Coryl writes managed files safely by default. Text, bytes, and structured data writes go through an atomic replacement flow: Coryl writes a temporary file in the destination directory, flushes it, and then replaces the target file.
+On the default local filesystem, Coryl writes managed files safely by default. Text, bytes, and structured data writes go through an atomic replacement flow: Coryl writes a temporary file in the destination directory, flushes it, and then replaces the target file.
 
 That means existing calls such as `resource.write_text(...)`, `resource.write_json(...)`, and `settings.save(...)` automatically use the safer behavior without changing your code.
+
+When you opt into an `fsspec` backend, atomic replacement may not be available for that backend. In those cases Coryl falls back to a direct write instead of pretending the backend is atomic.
 
 ### Read-Only Resources
 
@@ -534,6 +580,8 @@ with settings.lock():
     data = settings.load()
     settings.save(data)
 ```
+
+Lock support currently applies to the default local filesystem resources. fsspec-backed resources may not expose a compatible cross-backend locking model in this first implementation.
 
 `ConfigResource.update(..., lock=True)` uses the same lock flow for convenient config updates.
 
@@ -730,6 +778,8 @@ This makes Coryl useful for applications that want predictable, centralized reso
 Main entry points:
 
 - `Coryl(root, resources=None, manifest_path=None, create_missing=True)`
+- `Coryl(root, resources=None, manifest_path=None, create_missing=True, filesystem="fsspec", protocol=...)`
+- `Coryl.with_fs(root, protocol=None, resources=None, manifest_path=None, create_missing=True)`
 - `Coryl.for_app(app_name, app_author=None, version=None, roaming=False, multipath=False, ensure=True, create_missing=True)`
 - `register_file(name, path, ...)`
 - `register_directory(name, path, ...)`

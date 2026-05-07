@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from datetime import date, datetime, time
 from math import isfinite
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Literal
 
 try:
@@ -30,16 +30,16 @@ _STRUCTURED_SUFFIXES: dict[str, StructuredFormat] = {
 _TOML_BARE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def structured_format_for_path(path: str | Path) -> StructuredFormat | None:
+def structured_format_for_path(path: str | PurePath) -> StructuredFormat | None:
     return _STRUCTURED_SUFFIXES.get(Path(path).suffix.lower())
 
 
-def supports_structured_data(path: str | Path) -> bool:
+def supports_structured_data(path: str | PurePath) -> bool:
     return structured_format_for_path(path) is not None
 
 
 def load_from_path(
-    path: str | Path,
+    path: str | PurePath,
     text: str,
     *,
     unique_keys: bool = False,
@@ -53,7 +53,7 @@ def load_from_path(
     return loads(text, format_name, unique_keys=unique_keys)
 
 
-def dump_to_path(path: str | Path, content: object) -> str:
+def dump_to_path(path: str | PurePath, content: object) -> str:
     format_name = structured_format_for_path(path)
     if format_name is None:
         raise UnsupportedFormatError(

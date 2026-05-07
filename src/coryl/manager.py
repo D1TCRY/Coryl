@@ -8,7 +8,8 @@ from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath
 from typing import Generic, TypeVar
 
-from ._paths import is_within_root, resolve_managed_path, validate_managed_path_input
+from ._fs import create_filesystem
+from ._paths import ManagedPath, is_within_root, validate_managed_path_input
 from .exceptions import (
     CorylOptionalDependencyError,
     CorylValidationError,
@@ -348,12 +349,22 @@ class ResourceManager:
         resources: Mapping[str, ResourceInput] | None = None,
         manifest_path: str | Path | None = None,
         create_missing: bool = True,
+        filesystem: str | None = None,
+        protocol: str | None = None,
         _named_roots: Mapping[str, str | Path] | None = None,
     ) -> None:
-        base_root = Path(root).resolve(strict=False)
-        self._root_paths = self._build_root_paths(base_root, _named_roots)
+        self._filesystem = create_filesystem(
+            root,
+            filesystem=filesystem,
+            protocol=protocol,
+        )
+        self._root_paths = self._build_root_paths(
+            self._filesystem.root_path,
+            _named_roots,
+            filesystem_kind=self._filesystem.kind,
+        )
         self._root_path = self._root_paths[DEFAULT_ROOT_NAME]
-        self._manifest_path: Path | None = None
+        self._manifest_path: ManagedPath | None = None
         self._manifest_data: dict[str, object] | None = None
         self._manifest_resource_names: set[str] = set()
         self._create_missing = create_missing
@@ -369,6 +380,25 @@ class ResourceManager:
 
         if resources:
             self.register_many(resources, replace=True)
+
+    @classmethod
+    def with_fs(
+        cls,
+        root: str | Path,
+        *,
+        protocol: str | None = None,
+        resources: Mapping[str, ResourceInput] | None = None,
+        manifest_path: str | Path | None = None,
+        create_missing: bool = True,
+    ) -> "ResourceManager":
+        return cls(
+            root,
+            resources=resources,
+            manifest_path=manifest_path,
+            create_missing=create_missing,
+            filesystem="fsspec",
+            protocol=protocol,
+        )
 
     @classmethod
     def for_app(
@@ -420,17 +450,17 @@ class ResourceManager:
 
     def __repr__(self) -> str:
         return (
-            f"{self.__class__.__name__}(root={self.root_path!r}, "
+            f"{self.__class__.__name__}(root={self._filesystem.display_path(self.root_path)!r}, "
             f"resources={list(self._resources)!r}, manifest_path={self.manifest_path!r})"
         )
 
     def __str__(self) -> str:
         return (
-            f"<{self.__class__.__name__} root='{self.root_path}' "
+            f"<{self.__class__.__name__} root='{self._filesystem.display_path(self.root_path)}' "
             f"resources={len(self._resources)}>"
         )
 
-    def __getattr__(self, name: str) -> Path:
+    def __getattr__(self, name: str) -> ManagedPath:
         if name.endswith("_file_path"):
             resource_name = name[: -len("_file_path")]
             try:
@@ -454,39 +484,39 @@ class ResourceManager:
         return is_within_root(child, parent)
 
     @property
-    def root_path(self) -> Path:
+    def root_path(self) -> ManagedPath:
         return self._root_path
 
     @property
-    def config_root_path(self) -> Path:
+    def config_root_path(self) -> ManagedPath:
         return self._root_path_for(CONFIG_ROOT_NAME)
 
     @property
-    def cache_root_path(self) -> Path:
+    def cache_root_path(self) -> ManagedPath:
         return self._root_path_for(CACHE_ROOT_NAME)
 
     @property
-    def data_root_path(self) -> Path:
+    def data_root_path(self) -> ManagedPath:
         return self._root_path_for(DATA_ROOT_NAME)
 
     @property
-    def log_root_path(self) -> Path:
+    def log_root_path(self) -> ManagedPath:
         return self._root_path_for(LOG_ROOT_NAME)
 
     @property
-    def named_roots(self) -> dict[str, Path]:
+    def named_roots(self) -> dict[str, ManagedPath]:
         return dict(self._root_paths)
 
     @property
-    def root_folder_path(self) -> Path:
+    def root_folder_path(self) -> ManagedPath:
         return self.root_path
 
     @property
-    def manifest_path(self) -> Path | None:
+    def manifest_path(self) -> ManagedPath | None:
         return self._manifest_path
 
     @property
-    def config_file_path(self) -> Path:
+    def config_file_path(self) -> ManagedPath:
         if self._manifest_path is not None:
             return self._manifest_path
         config_resource = self._resources.get("config")
@@ -529,7 +559,7 @@ class ResourceManager:
         return self._logs
 
     @property
-    def file_paths(self) -> list[Path]:
+    def file_paths(self) -> list[ManagedPath]:
         return [
             resource.path
             for resource in self._resources.values()
@@ -537,7 +567,7 @@ class ResourceManager:
         ]
 
     @property
-    def directory_paths(self) -> list[Path]:
+    def directory_paths(self) -> list[ManagedPath]:
         return [
             resource.path
             for resource in self._resources.values()
@@ -545,7 +575,7 @@ class ResourceManager:
         ]
 
     @property
-    def paths(self) -> list[Path]:
+    def paths(self) -> list[ManagedPath]:
         return self.file_paths + self.directory_paths
 
     def load_manifest(self, manifest_path: str | Path) -> dict[str, object]:
@@ -555,7 +585,10 @@ class ResourceManager:
         )
         self._manifest_path = resolved_manifest_path
 
-        raw_content = resolved_manifest_path.read_text(encoding="utf-8")
+        raw_content = self._filesystem.read_text(
+            resolved_manifest_path,
+            encoding="utf-8",
+        )
         try:
             manifest_data = load_from_path(
                 resolved_manifest_path,
@@ -673,6 +706,11 @@ class ResourceManager:
         schema: type[object] | None = None,
         replace: bool = False,
     ) -> LayeredConfigResource:
+        if self._filesystem.kind != "local":
+            raise CorylValidationError(
+                "register_layered_config() currently requires the default local filesystem. "
+                "The initial fsspec support is limited to basic file and directory operations."
+            )
         self._validate_resource_name(name)
         self._ensure_replaceable(name, replace=replace)
         if secrets is not None and secrets_dir is not None:
@@ -699,6 +737,7 @@ class ResourceManager:
             name=name,
             path=resolved_path,
             kind=spec.kind,
+            filesystem=self._filesystem,
             create=spec.create,
             encoding=spec.encoding,
             role=spec.role,
@@ -892,19 +931,19 @@ class ResourceManager:
             raise ResourceKindError(f"Resource '{name}' is not a log resource.")
         return resource
 
-    def path(self, name: str) -> Path:
+    def path(self, name: str) -> ManagedPath:
         return self.resource(name).path
 
     def content(self, name: str, default: object = MISSING) -> object:
         return self.resource(name).content(default=default)
 
-    def write_content(self, name: str, content: object) -> Path:
+    def write_content(self, name: str, content: object) -> ManagedPath:
         return self.file(name).write(content)
 
-    def ensure(self, name: str) -> Path:
+    def ensure(self, name: str) -> ManagedPath:
         return self.resource(name).ensure()
 
-    def resolve(self, *parts: str | Path) -> Path:
+    def resolve(self, *parts: str | Path) -> ManagedPath:
         return self._resolve_from_root(Path(*parts))
 
     def audit_paths(self) -> dict[str, object]:
@@ -922,7 +961,7 @@ class ResourceManager:
 
             managed_root = resource.managed_root or self.root_path
             resources[name] = {
-                "path": str(resource.path),
+                "path": resource.display_path,
                 "exists": resource.exists(),
                 "kind": resource.kind,
                 "role": resource.role,
@@ -930,7 +969,7 @@ class ResourceManager:
             }
 
         return {
-            "root": str(self.root_path),
+            "root": self._filesystem.display_path(self.root_path),
             "resources": resources,
         }
 
@@ -939,7 +978,7 @@ class ResourceManager:
         relative_path: str | Path,
         *,
         allow_absolute: bool = False,
-    ) -> Path:
+    ) -> ManagedPath:
         return self._resolve_from_named_root(
             relative_path,
             root_name=DEFAULT_ROOT_NAME,
@@ -952,9 +991,9 @@ class ResourceManager:
         *,
         root_name: str,
         allow_absolute: bool = False,
-    ) -> Path:
+    ) -> ManagedPath:
         root_path = self._root_path_for(root_name)
-        return resolve_managed_path(
+        return self._filesystem.resolve(
             relative_path,
             base_path=root_path,
             allowed_root=root_path,
@@ -996,6 +1035,7 @@ class ResourceManager:
             version=version,
             managed_root=managed_root,
             root_name=actual_root_name,
+            filesystem=self._filesystem,
         )
         self._resources[name] = resource
         return resource
@@ -1086,19 +1126,29 @@ class ResourceManager:
 
     @staticmethod
     def _build_root_paths(
-        base_root: Path,
+        base_root: ManagedPath,
         named_roots: Mapping[str, str | Path] | None,
-    ) -> dict[str, Path]:
+        *,
+        filesystem_kind: str,
+    ) -> dict[str, ManagedPath]:
         roots = {
-            DEFAULT_ROOT_NAME: base_root.resolve(strict=False),
-            CONFIG_ROOT_NAME: base_root.resolve(strict=False),
-            CACHE_ROOT_NAME: base_root.resolve(strict=False),
-            DATA_ROOT_NAME: base_root.resolve(strict=False),
-            LOG_ROOT_NAME: base_root.resolve(strict=False),
+            DEFAULT_ROOT_NAME: base_root,
+            CONFIG_ROOT_NAME: base_root,
+            CACHE_ROOT_NAME: base_root,
+            DATA_ROOT_NAME: base_root,
+            LOG_ROOT_NAME: base_root,
         }
-        if named_roots is None:
+        if named_roots is None or filesystem_kind != "local":
             return roots
 
+        resolved_base_root = Path(base_root).resolve(strict=False)
+        roots = {
+            DEFAULT_ROOT_NAME: resolved_base_root,
+            CONFIG_ROOT_NAME: resolved_base_root,
+            CACHE_ROOT_NAME: resolved_base_root,
+            DATA_ROOT_NAME: resolved_base_root,
+            LOG_ROOT_NAME: resolved_base_root,
+        }
         for name, path_value in named_roots.items():
             roots[name] = Path(path_value).resolve(strict=False)
         return roots
@@ -1115,7 +1165,7 @@ class ResourceManager:
             return LOG_ROOT_NAME
         return DEFAULT_ROOT_NAME
 
-    def _root_path_for(self, root_name: str) -> Path:
+    def _root_path_for(self, root_name: str) -> ManagedPath:
         try:
             return self._root_paths[root_name]
         except KeyError as error:
@@ -1277,8 +1327,8 @@ class ResourceManager:
 
         raw_path = validate_managed_path_input(secrets_dir, allow_absolute=True)
         if raw_path.is_absolute():
-            return raw_path.resolve(strict=False)
-        return self._resolve_from_named_root(raw_path, root_name=root_name)
+            return Path(raw_path).resolve(strict=False)
+        return Path(self._resolve_from_named_root(raw_path, root_name=root_name))
 
     def _resolve_optional_rooted_path(
         self,
@@ -1291,8 +1341,8 @@ class ResourceManager:
 
         raw_path = validate_managed_path_input(path_value, allow_absolute=True)
         if raw_path.is_absolute():
-            return raw_path.resolve(strict=False)
-        return self._resolve_from_named_root(raw_path, root_name=root_name)
+            return Path(raw_path).resolve(strict=False)
+        return Path(self._resolve_from_named_root(raw_path, root_name=root_name))
 
     @staticmethod
     def _normalize_layered_relative_paths(
@@ -1319,7 +1369,7 @@ class ResourceManager:
 
     @staticmethod
     def _package_relative_path(relative_path: str | Path) -> Path:
-        return validate_managed_path_input(relative_path)
+        return Path(validate_managed_path_input(relative_path))
 
     @classmethod
     def _resolve_package_assets(cls, package: str, relative_path: str | Path) -> Traversable:

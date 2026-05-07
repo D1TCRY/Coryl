@@ -9,6 +9,7 @@ import sys
 import tempfile
 import types
 import unittest
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -280,6 +281,64 @@ class CorylTests(unittest.TestCase):
                 next(settings.watch())
 
         self.assertIn("pip install coryl[watch]", str(caught.exception))
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("fsspec") is not None,
+        "fsspec is not installed",
+    )
+    def test_fsspec_memory_backend_supports_basic_file_and_json_io(self) -> None:
+        app = Coryl.with_fs(
+            root=f"memory://coryl-{uuid.uuid4().hex}",
+            protocol="memory",
+        )
+
+        notes = app.register_file("notes", "data/notes.txt")
+        settings = app.register_file("settings", "config/settings.json")
+
+        self.assertTrue(notes.exists())
+        notes.write_text("hello from fsspec")
+        settings.write_json({"name": "Coryl", "enabled": True})
+
+        self.assertEqual(notes.read_text(), "hello from fsspec")
+        self.assertEqual(
+            settings.read_json(),
+            {"name": "Coryl", "enabled": True},
+        )
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("fsspec") is not None,
+        "fsspec is not installed",
+    )
+    def test_fsspec_constructor_supports_directories_and_glob(self) -> None:
+        app = Coryl(
+            root=f"memory://coryl-{uuid.uuid4().hex}",
+            filesystem="fsspec",
+        )
+
+        exports = app.register_directory("exports", "build/exports")
+        assets = app.register_assets("assets", "assets")
+        logo = assets.file("images", "logo.txt", create=True)
+        config = assets.file("config", "settings.json", create=True)
+        logo.write_text("logo")
+        config.write_json({"theme": "light"})
+
+        self.assertTrue(exports.exists())
+        self.assertTrue(exports.is_dir())
+        self.assertEqual(app.root_path.as_posix().count("/"), 1)
+        self.assertEqual(
+            [path.name for path in assets.glob("**/*")],
+            ["config", "settings.json", "images", "logo.txt"],
+        )
+
+    def test_fsspec_missing_dependency_error_is_clear(self) -> None:
+        with mock.patch(
+            "coryl._fs.import_module",
+            side_effect=ModuleNotFoundError("No module named 'fsspec'"),
+        ):
+            with self.assertRaises(CorylOptionalDependencyError) as caught:
+                Coryl.with_fs("memory://app", protocol="memory")
+
+        self.assertIn("pip install coryl[fsspec]", str(caught.exception))
 
     def test_file_resource_watch_filters_unrelated_changes(self) -> None:
         manager = Coryl(self.root)

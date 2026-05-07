@@ -25,6 +25,7 @@ license-files = ["LICEN[CS]E*"]
 
 [project.optional-dependencies]
 diskcache = ["diskcache>=5"]
+fsspec = ["fsspec>=2024"]
 lock = ["filelock>=3"]
 platform = ["platformdirs>=4"]
 pydantic = ["pydantic>=2", "pydantic-settings>=2"]
