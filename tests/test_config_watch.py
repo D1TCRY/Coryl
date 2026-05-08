@@ -72,5 +72,7 @@ def test_config_watch_helpers_raise_clear_optional_dependency_errors_when_missin
     app = Coryl(tmp_path)
     settings = app.configs.add("settings", "config/settings.json")
 
-    with pytest.raises(CorylOptionalDependencyError, match=r"pip install coryl\[watch\]"):
+    with pytest.raises(
+        CorylOptionalDependencyError, match=r"pip install coryl\[watch\]"
+    ):
         next(settings.watch_reload())

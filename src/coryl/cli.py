@@ -73,8 +73,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output JSON instead of the default table view.",
     )
 
-    resources_parser = root_subparsers.add_parser("resources", help="Inspect manifest resources.")
-    resources_subparsers = resources_parser.add_subparsers(dest="resources_command", required=True)
+    resources_parser = root_subparsers.add_parser(
+        "resources", help="Inspect manifest resources."
+    )
+    resources_subparsers = resources_parser.add_subparsers(
+        dest="resources_command", required=True
+    )
 
     resources_list = resources_subparsers.add_parser(
         "list",
@@ -90,8 +94,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     resources_check.set_defaults(handler=_handle_resources_check)
 
-    config_parser = root_subparsers.add_parser("config", help="Inspect config resources.")
-    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
+    config_parser = root_subparsers.add_parser(
+        "config", help="Inspect config resources."
+    )
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_command", required=True
+    )
 
     config_show = config_subparsers.add_parser(
         "show",
@@ -112,8 +120,12 @@ def _build_parser() -> argparse.ArgumentParser:
     cache_clear.add_argument("name", help="Cache resource name.")
     cache_clear.set_defaults(handler=_handle_cache_clear)
 
-    assets_parser = root_subparsers.add_parser("assets", help="Inspect asset resources.")
-    assets_subparsers = assets_parser.add_subparsers(dest="assets_command", required=True)
+    assets_parser = root_subparsers.add_parser(
+        "assets", help="Inspect asset resources."
+    )
+    assets_subparsers = assets_parser.add_subparsers(
+        dest="assets_command", required=True
+    )
 
     assets_list = assets_subparsers.add_parser(
         "list",
@@ -355,10 +367,7 @@ def _json_ready(value: object) -> object:
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, Mapping):
-        return {
-            str(key): _json_ready(item)
-            for key, item in value.items()
-        }
+        return {str(key): _json_ready(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_json_ready(item) for item in value]
     return str(value)

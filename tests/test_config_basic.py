@@ -53,7 +53,9 @@ def test_basic_config_resource_supports_registration_round_trip_and_dot_paths(
         settings.require("database.user")
 
 
-def test_basic_config_resource_handles_non_mapping_documents_where_supported(tmp_path) -> None:
+def test_basic_config_resource_handles_non_mapping_documents_where_supported(
+    tmp_path,
+) -> None:
     app = Coryl(tmp_path)
     entries = app.configs.add("entries", "config/entries.json")
 

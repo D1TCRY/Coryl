@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import time
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
@@ -69,17 +68,27 @@ class ResourceSpec:
         if not isinstance(self.required, bool):
             raise CorylValidationError("ResourceSpec.required must be a boolean.")
         if not isinstance(self.encoding, str) or not self.encoding:
-            raise CorylValidationError("ResourceSpec.encoding must be a non-empty string.")
+            raise CorylValidationError(
+                "ResourceSpec.encoding must be a non-empty string."
+            )
         if self.kind not in {"file", "directory"}:
-            raise ResourceKindError("ResourceSpec.kind must be either 'file' or 'directory'.")
+            raise ResourceKindError(
+                "ResourceSpec.kind must be either 'file' or 'directory'."
+            )
         if self.role not in {"resource", "config", "cache", "assets", "data", "logs"}:
             raise CorylValidationError("ResourceSpec.role is invalid.")
         if self.format is not None and not isinstance(self.format, str):
-            raise CorylValidationError("ResourceSpec.format must be a string when provided.")
+            raise CorylValidationError(
+                "ResourceSpec.format must be a string when provided."
+            )
         if self.schema is not None and not isinstance(self.schema, str):
-            raise CorylValidationError("ResourceSpec.schema must be a string when provided.")
+            raise CorylValidationError(
+                "ResourceSpec.schema must be a string when provided."
+            )
         if self.backend is not None and not isinstance(self.backend, str):
-            raise CorylValidationError("ResourceSpec.backend must be a string when provided.")
+            raise CorylValidationError(
+                "ResourceSpec.backend must be a string when provided."
+            )
         if self.role == "config" and self.kind != "file":
             raise CorylValidationError("Config resources must be files.")
         if self.role in {"cache", "assets"} and self.kind != "directory":
@@ -306,17 +315,29 @@ class Resource:
         if not isinstance(self.encoding, str) or not self.encoding:
             raise CorylValidationError("Resource.encoding must be a non-empty string.")
         if self.kind not in {"file", "directory"}:
-            raise ResourceKindError("Resource.kind must be either 'file' or 'directory'.")
+            raise ResourceKindError(
+                "Resource.kind must be either 'file' or 'directory'."
+            )
         if self.role not in {"resource", "config", "cache", "assets", "data", "logs"}:
             raise CorylValidationError("Resource.role is invalid.")
-        if self.declared_format is not None and not isinstance(self.declared_format, str):
-            raise CorylValidationError("Resource.declared_format must be a string when provided.")
+        if self.declared_format is not None and not isinstance(
+            self.declared_format, str
+        ):
+            raise CorylValidationError(
+                "Resource.declared_format must be a string when provided."
+            )
         if self.schema is not None and not isinstance(self.schema, str):
-            raise CorylValidationError("Resource.schema must be a string when provided.")
+            raise CorylValidationError(
+                "Resource.schema must be a string when provided."
+            )
         if self.backend is not None and not isinstance(self.backend, str):
-            raise CorylValidationError("Resource.backend must be a string when provided.")
+            raise CorylValidationError(
+                "Resource.backend must be a string when provided."
+            )
         if self.typed_schema is not None and not isinstance(self.typed_schema, type):
-            raise CorylValidationError("Resource.typed_schema must be a type when provided.")
+            raise CorylValidationError(
+                "Resource.typed_schema must be a type when provided."
+            )
         if self.managed_root is not None:
             if self.filesystem.kind == "local":
                 self.managed_root = Path(self.managed_root).resolve(strict=False)
@@ -332,7 +353,9 @@ class Resource:
         if self.role in {"cache", "assets"} and self.kind != "directory":
             raise CorylValidationError("Cache and asset resources must be directories.")
         if self.typed_schema is not None and self.role != "config":
-            raise CorylValidationError("Typed schemas can only be attached to config resources.")
+            raise CorylValidationError(
+                "Typed schemas can only be attached to config resources."
+            )
         if self.create:
             self.ensure()
 
@@ -373,7 +396,9 @@ class Resource:
 
     def open(self, *args: object, **kwargs: object) -> IO[str] | IO[bytes]:
         if self.kind != "file":
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
         if self.filesystem.kind != "local":
             raise CorylValidationError(
                 "Resource.open() is only supported for the default local filesystem."
@@ -385,7 +410,9 @@ class Resource:
 
     def read_text(self, *, encoding: str | None = None) -> str:
         if self.kind != "file":
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
         return self.filesystem.read_text(self.path, encoding=encoding or self.encoding)
 
     def write_text(
@@ -396,7 +423,9 @@ class Resource:
         atomic: bool = True,
     ) -> ManagedPath:
         if self.kind != "file":
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
         self._assert_writable("written")
 
         actual_encoding = encoding or self.encoding
@@ -406,19 +435,25 @@ class Resource:
 
     def read_bytes(self) -> bytes:
         if self.kind != "file":
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
         return self.filesystem.read_bytes(self.path)
 
     def write_bytes(self, content: bytes, *, atomic: bool = True) -> ManagedPath:
         if self.kind != "file":
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
         self._assert_writable("written")
 
         if atomic and self.filesystem.supports_atomic_writes:
             return _atomic_write_bytes(self.path, content)
         return self.filesystem.write_bytes(self.path, content)
 
-    def read_data(self, *, default: object = MISSING, encoding: str | None = None) -> object:
+    def read_data(
+        self, *, default: object = MISSING, encoding: str | None = None
+    ) -> object:
         return self._read_structured(default=default, encoding=encoding)
 
     def write_data(
@@ -430,8 +465,12 @@ class Resource:
     ) -> ManagedPath:
         return self._write_structured(content, encoding=encoding, atomic=atomic)
 
-    def read_json(self, *, default: object = MISSING, encoding: str | None = None) -> object:
-        return self._read_structured(default=default, expected_format="json", encoding=encoding)
+    def read_json(
+        self, *, default: object = MISSING, encoding: str | None = None
+    ) -> object:
+        return self._read_structured(
+            default=default, expected_format="json", encoding=encoding
+        )
 
     def write_json(
         self,
@@ -447,8 +486,12 @@ class Resource:
             atomic=atomic,
         )
 
-    def read_toml(self, *, default: object = MISSING, encoding: str | None = None) -> object:
-        return self._read_structured(default=default, expected_format="toml", encoding=encoding)
+    def read_toml(
+        self, *, default: object = MISSING, encoding: str | None = None
+    ) -> object:
+        return self._read_structured(
+            default=default, expected_format="toml", encoding=encoding
+        )
 
     def write_toml(
         self,
@@ -464,8 +507,12 @@ class Resource:
             atomic=atomic,
         )
 
-    def read_yaml(self, *, default: object = MISSING, encoding: str | None = None) -> object:
-        return self._read_structured(default=default, expected_format="yaml", encoding=encoding)
+    def read_yaml(
+        self, *, default: object = MISSING, encoding: str | None = None
+    ) -> object:
+        return self._read_structured(
+            default=default, expected_format="yaml", encoding=encoding
+        )
 
     def write_yaml(
         self,
@@ -491,7 +538,9 @@ class Resource:
 
     def write(self, content: object) -> ManagedPath:
         if self.kind != "file":
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
         self._assert_writable("written")
 
         if self.format is not None:
@@ -508,11 +557,15 @@ class Resource:
         role: ResourceRole = "resource",
     ) -> "Resource":
         if self.kind != "directory":
-            raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a file, not a directory."
+            )
 
         candidate = self._resolve_child_path(*parts)
 
-        inferred_kind: ResourceKind = kind or ("file" if candidate.suffix else "directory")
+        inferred_kind: ResourceKind = kind or (
+            "file" if candidate.suffix else "directory"
+        )
         child_name = "/".join([self.name, *[str(part) for part in parts]])
         return create_resource(
             name=child_name,
@@ -530,14 +583,18 @@ class Resource:
 
     def iterdir(self) -> Iterator[ManagedPath]:
         if self.kind != "directory":
-            raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a file, not a directory."
+            )
         if not self.readonly:
             self.ensure()
         return iter(self.glob("*"))
 
     def glob(self, pattern: str) -> list[ManagedPath]:
         if self.kind != "directory":
-            raise ResourceKindError(f"Resource '{self.name}' is a file, not a directory.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a file, not a directory."
+            )
         if not self.readonly:
             self.ensure()
         return self.filesystem.glob(self._glob_pattern(pattern))
@@ -567,7 +624,9 @@ class Resource:
         else:
             watched_directories = (Path(self.path),)
 
-        effective_recursive = self.kind == "directory" if recursive is None else recursive
+        effective_recursive = (
+            self.kind == "directory" if recursive is None else recursive
+        )
         yield from _watch_relevant_paths(
             files=watched_files,
             directories=watched_directories,
@@ -606,7 +665,9 @@ class Resource:
         encoding: str | None = None,
     ) -> object:
         if self.kind != "file":
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
 
         actual_format = self.format
         if actual_format is None:
@@ -636,7 +697,9 @@ class Resource:
         atomic: bool = True,
     ) -> ManagedPath:
         if self.kind != "file":
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
 
         actual_format = self.format
         if actual_format is None:
@@ -841,11 +904,17 @@ class ConfigResource(Resource):
         to_version: int,
     ) -> Callable[[TMigrationFunc], TMigrationFunc]:
         if not _is_valid_version_number(from_version):
-            raise CorylValidationError("Migration from_version must be a non-negative integer.")
+            raise CorylValidationError(
+                "Migration from_version must be a non-negative integer."
+            )
         if not _is_valid_version_number(to_version):
-            raise CorylValidationError("Migration to_version must be a non-negative integer.")
+            raise CorylValidationError(
+                "Migration to_version must be a non-negative integer."
+            )
         if to_version <= from_version:
-            raise CorylValidationError("Migration to_version must be greater than from_version.")
+            raise CorylValidationError(
+                "Migration to_version must be greater than from_version."
+            )
 
         def register_migration(func: TMigrationFunc) -> TMigrationFunc:
             if from_version in self._migrations:
@@ -870,10 +939,14 @@ class ConfigResource(Resource):
 
         document = self.load(default={})
         if not isinstance(document, Mapping):
-            raise TypeError("ConfigResource.migrate() requires a mapping-based document.")
+            raise TypeError(
+                "ConfigResource.migrate() requires a mapping-based document."
+            )
 
         current_document = _copy_mapping(cast(Mapping[str, object], document))
-        current_version = _config_document_version(current_document, resource_name=self.name)
+        current_version = _config_document_version(
+            current_document, resource_name=self.name
+        )
         target_version = self.version
 
         if current_version == target_version:
@@ -907,7 +980,9 @@ class ConfigResource(Resource):
                     f"to {next_version} must return a mapping."
                 )
 
-            current_document = _copy_mapping(cast(Mapping[str, object], migrated_document))
+            current_document = _copy_mapping(
+                cast(Mapping[str, object], migrated_document)
+            )
             current_document["version"] = next_version
             current_version = next_version
 
@@ -923,7 +998,9 @@ class ConfigResource(Resource):
         def apply_update() -> dict[str, object]:
             current = self.load(default={})
             if not isinstance(current, Mapping):
-                raise TypeError("ConfigResource.update() requires a mapping-based document.")
+                raise TypeError(
+                    "ConfigResource.update() requires a mapping-based document."
+                )
 
             merged = dict(current)
             for mapping in mappings:
@@ -997,7 +1074,8 @@ class LayeredConfigResource(ConfigResource):
                 "LayeredConfigResource currently requires the default local filesystem."
             )
         self.layer_paths = tuple(
-            Path(path).resolve(strict=False) for path in (self.layer_paths or (self.path,))
+            Path(path).resolve(strict=False)
+            for path in (self.layer_paths or (self.path,))
         )
         if self.env_prefix is not None:
             if not isinstance(self.env_prefix, str) or not self.env_prefix.strip():
@@ -1020,7 +1098,10 @@ class LayeredConfigResource(ConfigResource):
                 raise UnsupportedFormatError(
                     "Layered config files must use one of: .json, .toml, .yaml, .yml."
                 )
-        if self.secrets_path is not None and structured_format_for_path(self.secrets_path) is None:
+        if (
+            self.secrets_path is not None
+            and structured_format_for_path(self.secrets_path) is None
+        ):
             raise UnsupportedFormatError(
                 "Layered config secrets files must use one of: .json, .toml, .yaml, .yml."
             )
@@ -1067,7 +1148,9 @@ class LayeredConfigResource(ConfigResource):
     def as_dict(self) -> dict[str, object]:
         document = self.load(default={})
         if not isinstance(document, Mapping):
-            raise TypeError("LayeredConfigResource.as_dict() requires a mapping-based document.")
+            raise TypeError(
+                "LayeredConfigResource.as_dict() requires a mapping-based document."
+            )
         return _copy_mapping(cast(Mapping[str, object], document))
 
     def reload(self) -> dict[str, object]:
@@ -1075,7 +1158,9 @@ class LayeredConfigResource(ConfigResource):
 
     def override(self, values: Mapping[str, object]) -> dict[str, object]:
         if not isinstance(values, Mapping):
-            raise TypeError("LayeredConfigResource.override() requires a mapping of overrides.")
+            raise TypeError(
+                "LayeredConfigResource.override() requires a mapping of overrides."
+            )
         self.runtime_overrides = _deep_merge_dicts(
             self.runtime_overrides,
             _normalized_override_mapping(values),
@@ -1099,7 +1184,9 @@ class LayeredConfigResource(ConfigResource):
                 raise CorylValidationError(
                     "LayeredConfigResource.apply_overrides() keys must be non-empty."
                 )
-            _set_dotted_path(overrides, normalized_key, _parse_conservative_value(value.strip()))
+            _set_dotted_path(
+                overrides, normalized_key, _parse_conservative_value(value.strip())
+            )
 
         return self.override(overrides)
 
@@ -1112,7 +1199,9 @@ class LayeredConfigResource(ConfigResource):
         def apply_update() -> dict[str, object]:
             current = self.load_base(default={})
             if not isinstance(current, Mapping):
-                raise TypeError("ConfigResource.update() requires a mapping-based document.")
+                raise TypeError(
+                    "ConfigResource.update() requires a mapping-based document."
+                )
 
             merged = dict(current)
             for mapping in mappings:
@@ -1141,7 +1230,9 @@ class LayeredConfigResource(ConfigResource):
     def _load_secret_document(self) -> dict[str, object] | None:
         if self.secrets_path is None:
             return None
-        return self._load_mapping_file(self.secrets_path, source_label="layered config secrets")
+        return self._load_mapping_file(
+            self.secrets_path, source_label="layered config secrets"
+        )
 
     def _load_mapping_file(
         self,
@@ -1157,7 +1248,9 @@ class LayeredConfigResource(ConfigResource):
                 )
             return None
         if not candidate.is_file():
-            raise ResourceKindError(f"{source_label.capitalize()} '{candidate}' is not a file.")
+            raise ResourceKindError(
+                f"{source_label.capitalize()} '{candidate}' is not a file."
+            )
 
         raw_content = candidate.read_text(encoding=self.encoding)
         document = load_from_path(candidate, raw_content)
@@ -1199,7 +1292,9 @@ class LayeredConfigResource(ConfigResource):
                 )
             return {}
         if not self.secrets_dir.is_dir():
-            raise CorylValidationError("Layered config secrets_dir must point to a directory.")
+            raise CorylValidationError(
+                "Layered config secrets_dir must point to a directory."
+            )
 
         overrides: dict[str, str] = {}
         for candidate in sorted(self.secrets_dir.iterdir()):
@@ -1240,10 +1335,14 @@ class CacheResource(Resource):
     def directory(self, *parts: str | Path, create: bool = False) -> "CacheResource":
         resource = self.joinpath(*parts, kind="directory", create=create, role="cache")
         if not isinstance(resource, CacheResource):  # pragma: no cover - defensive
-            raise TypeError("Cache directory creation returned the wrong resource type.")
+            raise TypeError(
+                "Cache directory creation returned the wrong resource type."
+            )
         return resource
 
-    def set(self, key: str | Path, value: object, ttl: float | None = None) -> ManagedPath:
+    def set(
+        self, key: str | Path, value: object, ttl: float | None = None
+    ) -> ManagedPath:
         resource = self._cache_file(key, create=True)
         return self._store_cache_value(resource, value, ttl=ttl)
 
@@ -1437,7 +1536,9 @@ class CacheResource(Resource):
         normalized: dict[str, dict[str, object]] = {}
         for raw_key, raw_metadata in entries.items():
             if not isinstance(raw_key, str) or not isinstance(raw_metadata, Mapping):
-                raise CorylValidationError("Cache index entries must map strings to objects.")
+                raise CorylValidationError(
+                    "Cache index entries must map strings to objects."
+                )
 
             metadata: dict[str, object] = {}
             mode = raw_metadata.get("mode")
@@ -1634,7 +1735,9 @@ class CacheResource(Resource):
         relative = target.relative_to(self.path).as_posix()
         prefix = f"{relative}/"
         stale_keys = [
-            entry_key for entry_key in list(index) if entry_key == relative or entry_key.startswith(prefix)
+            entry_key
+            for entry_key in list(index)
+            if entry_key == relative or entry_key.startswith(prefix)
         ]
         for entry_key in stale_keys:
             del index[entry_key]
@@ -1713,7 +1816,9 @@ class DiskCacheResource(CacheResource):
 
     def load(self, *parts: str | Path, default: object = MISSING) -> object:
         if not parts:
-            raise TypeError("DiskCacheResource.load() requires at least one key or path part.")
+            raise TypeError(
+                "DiskCacheResource.load() requires at least one key or path part."
+            )
 
         key = self._normalize_diskcache_key(parts[0], *parts[1:])
         if default is MISSING:
@@ -1743,7 +1848,9 @@ class DiskCacheResource(CacheResource):
         self._assert_writable("cleared")
         self.raw.clear()
 
-    def memoize(self, ttl: float | None = None) -> Callable[[Callable[..., object]], Callable[..., object]]:
+    def memoize(
+        self, ttl: float | None = None
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
         normalized_ttl = self._normalize_ttl(ttl)
         return self.raw.memoize(expire=normalized_ttl)
 
@@ -1772,7 +1879,9 @@ class AssetGroup(Resource):
     def directory(self, *parts: str | Path, create: bool = False) -> "AssetGroup":
         resource = self.joinpath(*parts, kind="directory", create=create, role="assets")
         if not isinstance(resource, AssetGroup):  # pragma: no cover - defensive
-            raise TypeError("Asset directory creation returned the wrong resource type.")
+            raise TypeError(
+                "Asset directory creation returned the wrong resource type."
+            )
         return resource
 
     def require(self, *parts: str | Path, kind: ResourceKind | None = None) -> Resource:
@@ -1867,7 +1976,9 @@ class PackageAssetResource:
 
     def _assert_file_available(self) -> None:
         if self.kind != "file" or self.traversable.is_dir():
-            raise ResourceKindError(f"Resource '{self.name}' is a directory, not a file.")
+            raise ResourceKindError(
+                f"Resource '{self.name}' is a directory, not a file."
+            )
         if not self.exists():
             raise FileNotFoundError(self.display_path)
 
@@ -1929,7 +2040,9 @@ class PackageAssetGroup:
             encoding=self.encoding,
         )
 
-    def directory(self, *parts: str | Path, create: bool = False) -> "PackageAssetGroup":
+    def directory(
+        self, *parts: str | Path, create: bool = False
+    ) -> "PackageAssetGroup":
         if create:
             raise CorylReadOnlyResourceError(
                 f"Package asset group '{self.name}' is read-only and cannot create directories."
@@ -1958,11 +2071,15 @@ class PackageAssetGroup:
 
         if kind == "file":
             if candidate.is_dir():
-                raise ResourceKindError(f"Resource '{child_name}' is a directory, not a file.")
+                raise ResourceKindError(
+                    f"Resource '{child_name}' is a directory, not a file."
+                )
             return self.file(*parts)
         if kind == "directory":
             if not candidate.is_dir():
-                raise ResourceKindError(f"Resource '{child_name}' is a file, not a directory.")
+                raise ResourceKindError(
+                    f"Resource '{child_name}' is a file, not a directory."
+                )
             return self.directory(*parts)
         if candidate.is_dir():
             return self.directory(*parts)
@@ -1970,13 +2087,17 @@ class PackageAssetGroup:
 
     def read_text(self, *parts: str | Path, encoding: str = "utf-8") -> str:
         resource = self.require(*parts, kind="file")
-        if not isinstance(resource, PackageAssetResource):  # pragma: no cover - defensive
+        if not isinstance(
+            resource, PackageAssetResource
+        ):  # pragma: no cover - defensive
             raise TypeError("Package asset read_text() resolved to a directory.")
         return resource.read_text(encoding=encoding)
 
     def read_bytes(self, *parts: str | Path) -> bytes:
         resource = self.require(*parts, kind="file")
-        if not isinstance(resource, PackageAssetResource):  # pragma: no cover - defensive
+        if not isinstance(
+            resource, PackageAssetResource
+        ):  # pragma: no cover - defensive
             raise TypeError("Package asset read_bytes() resolved to a directory.")
         return resource.read_bytes()
 
@@ -1987,13 +2108,17 @@ class PackageAssetGroup:
                 "Use file(...).as_file() for individual files or copy_to() for directories."
             )
         resource = self.require(*parts, kind="file")
-        if not isinstance(resource, PackageAssetResource):  # pragma: no cover - defensive
+        if not isinstance(
+            resource, PackageAssetResource
+        ):  # pragma: no cover - defensive
             raise TypeError("Package asset as_file() resolved to a directory.")
         return resource.as_file()
 
     def files(self, pattern: str = "**/*") -> list[PackageAssetResource]:
         matches: list[PackageAssetResource] = []
-        for relative_path, candidate in _iter_traversable_files(self.traversable, PurePosixPath(".")):
+        for relative_path, candidate in _iter_traversable_files(
+            self.traversable, PurePosixPath(".")
+        ):
             if relative_path.match(pattern):
                 matches.append(
                     PackageAssetResource(
@@ -2018,11 +2143,13 @@ class PackageAssetGroup:
             raise NotADirectoryError(destination_root)
         destination_root.mkdir(parents=True, exist_ok=True)
 
-        for relative_path, candidate in _iter_traversable_files(self.traversable, PurePosixPath(".")):
+        for relative_path, candidate in _iter_traversable_files(
+            self.traversable, PurePosixPath(".")
+        ):
             safe_relative_path = validate_managed_path_input(Path(*relative_path.parts))
-            destination_path = destination_root.joinpath(*safe_relative_path.parts).resolve(
-                strict=False
-            )
+            destination_path = destination_root.joinpath(
+                *safe_relative_path.parts
+            ).resolve(strict=False)
             if not is_within_root(destination_path, destination_root):
                 raise UnsafePathError(
                     f"Package asset copy target '{destination_path}' escapes '{destination_root}'."
@@ -2078,7 +2205,9 @@ def _child_resource_name(root_name: str, relative_path: PurePosixPath) -> str:
     return f"{root_name}/{relative}"
 
 
-def _join_pure_posix(base_path: PurePosixPath, relative_path: PurePosixPath) -> PurePosixPath:
+def _join_pure_posix(
+    base_path: PurePosixPath, relative_path: PurePosixPath
+) -> PurePosixPath:
     if relative_path == PurePosixPath("."):
         return base_path
     return base_path / relative_path
@@ -2173,7 +2302,9 @@ def _watch_relevant_paths(
     recursive: bool = True,
     ignore_permission_denied: bool | None = None,
 ) -> Iterator[WatchChanges]:
-    watched_files = tuple(dict.fromkeys(Path(path).resolve(strict=False) for path in files))
+    watched_files = tuple(
+        dict.fromkeys(Path(path).resolve(strict=False) for path in files)
+    )
     watched_directories = tuple(
         dict.fromkeys(Path(path).resolve(strict=False) for path in directories)
     )
@@ -2229,7 +2360,9 @@ def _is_watch_change_relevant(
     candidate = Path(changed_path).resolve(strict=False)
     if any(candidate == path for path in watched_files):
         return True
-    return any(is_within_root(candidate, directory) for directory in watched_directories)
+    return any(
+        is_within_root(candidate, directory) for directory in watched_directories
+    )
 
 
 def _copy_config_value(value: object) -> object:
@@ -2328,7 +2461,9 @@ def _parse_conservative_value(raw_value: str) -> object:
         return None
     if _INT_PATTERN.fullmatch(stripped):
         return int(stripped)
-    if _FLOAT_PATTERN.fullmatch(stripped) and any(marker in lowered for marker in (".", "e")):
+    if _FLOAT_PATTERN.fullmatch(stripped) and any(
+        marker in lowered for marker in (".", "e")
+    ):
         return float(stripped)
     if stripped.startswith("{") or stripped.startswith("["):
         try:

@@ -185,7 +185,9 @@ class CacheNamespace(_NamespaceBase[CacheResource]):
             replace=replace,
         )
         if not isinstance(resource, DiskCacheResource):  # pragma: no cover - defensive
-            raise TypeError("DiskCache cache registration returned the wrong resource type.")
+            raise TypeError(
+                "DiskCache cache registration returned the wrong resource type."
+            )
         return resource
 
     def get(self, name: str) -> CacheResource:
@@ -414,9 +416,13 @@ class ResourceManager:
     ) -> "ResourceManager":
         if not isinstance(app_name, str) or not app_name.strip():
             raise TypeError("app_name must be a non-empty string.")
-        if app_author is not None and (not isinstance(app_author, str) or not app_author.strip()):
+        if app_author is not None and (
+            not isinstance(app_author, str) or not app_author.strip()
+        ):
             raise TypeError("app_author must be a non-empty string when provided.")
-        if version is not None and (not isinstance(version, str) or not version.strip()):
+        if version is not None and (
+            not isinstance(version, str) or not version.strip()
+        ):
             raise TypeError("version must be a non-empty string when provided.")
 
         try:
@@ -478,7 +484,9 @@ class ResourceManager:
                 raise AttributeError(
                     f"{self.__class__.__name__!s} object has no attribute {name!r}"
                 ) from error
-        raise AttributeError(f"{self.__class__.__name__!s} object has no attribute {name!r}")
+        raise AttributeError(
+            f"{self.__class__.__name__!s} object has no attribute {name!r}"
+        )
 
     @staticmethod
     def is_child_of(child: str | Path, parent: str | Path) -> bool:
@@ -646,7 +654,9 @@ class ResourceManager:
             encoding=encoding,
             readonly=readonly,
         )
-        return self._register_spec(name, spec, replace=replace, root_name=DEFAULT_ROOT_NAME)
+        return self._register_spec(
+            name, spec, replace=replace, root_name=DEFAULT_ROOT_NAME
+        )
 
     def register_directory(
         self,
@@ -662,7 +672,9 @@ class ResourceManager:
             create=self._default_create_value(create, readonly=readonly),
             readonly=readonly,
         )
-        return self._register_spec(name, spec, replace=replace, root_name=DEFAULT_ROOT_NAME)
+        return self._register_spec(
+            name, spec, replace=replace, root_name=DEFAULT_ROOT_NAME
+        )
 
     def register_config(
         self,
@@ -719,7 +731,9 @@ class ResourceManager:
                 "register_layered_config() accepts either 'secrets' or 'secrets_dir', not both."
             )
 
-        layer_relative_paths = self._normalize_layered_relative_paths(relative_path, files=files)
+        layer_relative_paths = self._normalize_layered_relative_paths(
+            relative_path, files=files
+        )
         primary_relative_path = layer_relative_paths[-1]
         spec = ResourceSpec.config(
             primary_relative_path,
@@ -753,7 +767,9 @@ class ResourceManager:
             root_name=root_name,
             layer_paths=resolved_layer_paths,
             env_prefix=env_prefix,
-            secrets_path=self._resolve_optional_rooted_path(secrets, root_name=root_name),
+            secrets_path=self._resolve_optional_rooted_path(
+                secrets, root_name=root_name
+            ),
             secrets_dir=self._resolve_secrets_dir(secrets_dir, root_name=root_name),
         )
         self._resources[name] = resource
@@ -873,7 +889,9 @@ class ResourceManager:
             name=name,
             package=package,
             traversable=root_traversable,
-            package_path=PurePosixPath(self._package_relative_path(relative_path).as_posix()),
+            package_path=PurePosixPath(
+                self._package_relative_path(relative_path).as_posix()
+            ),
             relative_path=PurePosixPath("."),
             readonly=True,
         )
@@ -895,7 +913,9 @@ class ResourceManager:
         try:
             return self._resources[name]
         except KeyError as error:
-            raise ResourceNotRegisteredError(f"Resource '{name}' is not registered.") from error
+            raise ResourceNotRegisteredError(
+                f"Resource '{name}' is not registered."
+            ) from error
 
     def file(self, name: str) -> Resource:
         resource = self.resource(name)
@@ -1059,10 +1079,14 @@ class ResourceManager:
             try:
                 path_value = definition["path"]
             except KeyError as error:
-                raise ManifestFormatError("Resource mapping must contain a 'path' key.") from error
+                raise ManifestFormatError(
+                    "Resource mapping must contain a 'path' key."
+                ) from error
 
             if not isinstance(path_value, (str, Path)):
-                raise ManifestFormatError("Resource mapping 'path' must be a string or Path.")
+                raise ManifestFormatError(
+                    "Resource mapping 'path' must be a string or Path."
+                )
 
             kind = definition.get("kind")
             if kind is not None and not isinstance(kind, str):
@@ -1079,10 +1103,14 @@ class ResourceManager:
                 definition.get("readonly", False),
                 field_name="readonly",
             )
-            create = self._coerce_bool_field(
-                definition["create"],
-                field_name="create",
-            ) if "create" in definition else self._default_create_value(None, readonly=readonly)
+            create = (
+                self._coerce_bool_field(
+                    definition["create"],
+                    field_name="create",
+                )
+                if "create" in definition
+                else self._default_create_value(None, readonly=readonly)
+            )
             required = self._coerce_bool_field(
                 definition.get("required", False),
                 field_name="required",
@@ -1177,7 +1205,9 @@ class ResourceManager:
         try:
             return self._root_paths[root_name]
         except KeyError as error:
-            raise CorylValidationError(f"Unknown managed root {root_name!r}.") from error
+            raise CorylValidationError(
+                f"Unknown managed root {root_name!r}."
+            ) from error
 
     @staticmethod
     def _validate_resource_name(name: str) -> None:
@@ -1192,13 +1222,17 @@ class ResourceManager:
     def _infer_kind(path_value: str | Path) -> ResourceKind:
         return "file" if Path(path_value).suffix else "directory"
 
-    def _parse_manifest(self, manifest_data: Mapping[str, object]) -> dict[str, ResourceSpec]:
+    def _parse_manifest(
+        self, manifest_data: Mapping[str, object]
+    ) -> dict[str, ResourceSpec]:
         self._validate_manifest_version(manifest_data)
 
         has_resources = "resources" in manifest_data
         has_legacy_paths = "paths" in manifest_data
         if has_resources and has_legacy_paths:
-            raise ManifestFormatError("Manifest cannot define both 'resources' and legacy 'paths'.")
+            raise ManifestFormatError(
+                "Manifest cannot define both 'resources' and legacy 'paths'."
+            )
         if has_resources:
             resources_section = manifest_data["resources"]
             if not isinstance(resources_section, Mapping):
@@ -1218,7 +1252,9 @@ class ResourceManager:
         for raw_name, definition in resources_section.items():
             name = self._coerce_resource_name(raw_name)
             if name in parsed:
-                raise ManifestFormatError(f"Manifest defines duplicate resource name '{name}'.")
+                raise ManifestFormatError(
+                    f"Manifest defines duplicate resource name '{name}'."
+                )
             parsed[name] = self._coerce_manifest_resource_spec(name, definition)
         return parsed
 
@@ -1235,7 +1271,9 @@ class ResourceManager:
             raise ManifestFormatError("'paths.directories' must be a mapping.")
 
         parsed = self._parse_legacy_resource_section(files_section, kind="file")
-        duplicates = sorted(set(parsed).intersection(self._legacy_names(directories_section)))
+        duplicates = sorted(
+            set(parsed).intersection(self._legacy_names(directories_section))
+        )
         if duplicates:
             joined_names = ", ".join(repr(name) for name in duplicates)
             raise ManifestFormatError(
@@ -1243,7 +1281,9 @@ class ResourceManager:
                 f"{joined_names}."
             )
 
-        parsed.update(self._parse_legacy_resource_section(directories_section, kind="directory"))
+        parsed.update(
+            self._parse_legacy_resource_section(directories_section, kind="directory")
+        )
         return parsed
 
     def _parse_legacy_resource_section(
@@ -1256,7 +1296,9 @@ class ResourceManager:
         for raw_name, path_value in section.items():
             name = self._coerce_resource_name(raw_name)
             if name in parsed:
-                raise ManifestFormatError(f"Manifest defines duplicate resource name '{name}'.")
+                raise ManifestFormatError(
+                    f"Manifest defines duplicate resource name '{name}'."
+                )
             parsed[name] = self._coerce_manifest_resource_spec(
                 name,
                 {"path": path_value, "kind": kind},
@@ -1271,7 +1313,9 @@ class ResourceManager:
         try:
             return self._coerce_resource_spec(definition)
         except ManifestFormatError as error:
-            raise ManifestFormatError(f"Resource '{name}' is invalid: {error}") from error
+            raise ManifestFormatError(
+                f"Resource '{name}' is invalid: {error}"
+            ) from error
         except (CorylValidationError, ResourceKindError) as error:
             raise type(error)(f"Resource '{name}' is invalid: {error}") from error
 
@@ -1368,11 +1412,15 @@ class ResourceManager:
                     "configs.layered() accepts either a positional path or 'files=', not both."
                 )
             if not files:
-                raise TypeError("configs.layered() 'files' must contain at least one path.")
+                raise TypeError(
+                    "configs.layered() 'files' must contain at least one path."
+                )
             return tuple(Path(path_value) for path_value in files)
 
         if relative_path is None:
-            raise TypeError("configs.layered() requires a path or a non-empty 'files' list.")
+            raise TypeError(
+                "configs.layered() requires a path or a non-empty 'files' list."
+            )
         return (Path(relative_path),)
 
     @staticmethod
@@ -1380,11 +1428,15 @@ class ResourceManager:
         return Path(validate_managed_path_input(relative_path))
 
     @classmethod
-    def _resolve_package_assets(cls, package: str, relative_path: str | Path) -> Traversable:
+    def _resolve_package_assets(
+        cls, package: str, relative_path: str | Path
+    ) -> Traversable:
         try:
             traversable = importlib_resources.files(package)
         except ModuleNotFoundError as error:
-            raise CorylValidationError(f"Package '{package}' could not be imported.") from error
+            raise CorylValidationError(
+                f"Package '{package}' could not be imported."
+            ) from error
 
         package_path = cls._package_relative_path(relative_path)
         for part in package_path.parts:

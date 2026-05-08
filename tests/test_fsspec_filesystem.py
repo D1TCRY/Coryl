@@ -29,24 +29,32 @@ def _relative_paths(paths: list[PurePosixPath], root: PurePosixPath) -> set[str]
     return {path.relative_to(root).as_posix() for path in paths}
 
 
-@pytest.fixture(params=[_build_with_fs, _build_with_constructor], ids=["with-fs", "filesystem-arg"])
+@pytest.fixture(
+    params=[_build_with_fs, _build_with_constructor], ids=["with-fs", "filesystem-arg"]
+)
 def memory_app(request: pytest.FixtureRequest) -> Coryl:
     builder = request.param
     return builder(_memory_root())
 
 
-def test_fsspec_construction_supports_both_documented_entry_points(memory_app: Coryl) -> None:
+def test_fsspec_construction_supports_both_documented_entry_points(
+    memory_app: Coryl,
+) -> None:
     assert isinstance(memory_app.root_path, PurePosixPath)
     assert memory_app.root_path.is_absolute()
     assert memory_app.root_path.name.startswith("coryl-")
 
 
-def test_fsspec_memory_backend_supports_basic_resources_and_io(memory_app: Coryl) -> None:
+def test_fsspec_memory_backend_supports_basic_resources_and_io(
+    memory_app: Coryl,
+) -> None:
     notes = memory_app.register_file("notes", "data/notes.txt", create=False)
     blob = memory_app.register_file("blob", "data/blob.bin", create=False)
     state = memory_app.register_file("state", "data/state.json", create=False)
     app_toml = memory_app.register_file("app_toml", "config/app.toml", create=False)
-    settings = memory_app.register_config("settings", "config/settings.json", create=False)
+    settings = memory_app.register_config(
+        "settings", "config/settings.json", create=False
+    )
     exports = memory_app.register_directory("exports", "build/exports", create=False)
 
     assert notes.exists() is False
@@ -76,14 +84,18 @@ def test_fsspec_memory_backend_supports_basic_resources_and_io(memory_app: Coryl
 def test_fsspec_yaml_helpers_work_when_yaml_is_available(memory_app: Coryl) -> None:
     pytest.importorskip("yaml")
 
-    settings = memory_app.register_file("settings_yaml", "config/settings.yaml", create=False)
+    settings = memory_app.register_file(
+        "settings_yaml", "config/settings.yaml", create=False
+    )
 
     settings.write_yaml({"theme": "dark", "enabled": True})
 
     assert settings.read_yaml() == {"theme": "dark", "enabled": True}
 
 
-def test_fsspec_memory_backend_supports_builtin_cache_helpers(memory_app: Coryl) -> None:
+def test_fsspec_memory_backend_supports_builtin_cache_helpers(
+    memory_app: Coryl,
+) -> None:
     cache = memory_app.register_cache("http", ".cache/http", create=False)
     json_calls = 0
     text_calls = 0
@@ -142,9 +154,17 @@ def test_fsspec_directory_glob_and_asset_files_work(memory_app: Coryl) -> None:
 @pytest.mark.parametrize(
     ("path_factory", "expected_error"),
     [
-        pytest.param(lambda _tmp_path: "../escape.txt", CorylUnsafePathError, id="traversal"),
-        pytest.param(lambda _tmp_path: "/escape.txt", CorylPathError, id="absolute-posix"),
-        pytest.param(lambda tmp_path: tmp_path / "escape.txt", CorylPathError, id="absolute-local"),
+        pytest.param(
+            lambda _tmp_path: "../escape.txt", CorylUnsafePathError, id="traversal"
+        ),
+        pytest.param(
+            lambda _tmp_path: "/escape.txt", CorylPathError, id="absolute-posix"
+        ),
+        pytest.param(
+            lambda tmp_path: tmp_path / "escape.txt",
+            CorylPathError,
+            id="absolute-local",
+        ),
         pytest.param(
             lambda _tmp_path: "memory://elsewhere/escape.txt",
             CorylPathError,
@@ -185,7 +205,9 @@ def test_fsspec_child_resources_cannot_escape_the_parent(
         assets.file(*parts)
 
 
-def test_fsspec_child_resources_reject_local_absolute_paths(memory_app: Coryl, tmp_path: Path) -> None:
+def test_fsspec_child_resources_reject_local_absolute_paths(
+    memory_app: Coryl, tmp_path: Path
+) -> None:
     assets = memory_app.register_assets("assets", "assets")
 
     with pytest.raises(CorylPathError):
@@ -198,11 +220,15 @@ def test_fsspec_atomic_writes_fall_back_to_regular_writes(
 ) -> None:
     notes = memory_app.register_file("notes", "data/notes.txt", create=False)
     blob = memory_app.register_file("blob", "data/blob.bin", create=False)
-    settings = memory_app.register_config("settings", "config/settings.toml", create=False)
+    settings = memory_app.register_config(
+        "settings", "config/settings.toml", create=False
+    )
 
     def fail_atomic(*args: object, **kwargs: object) -> PurePosixPath:
         del args, kwargs
-        raise AssertionError("local atomic helpers should not run for fsspec-backed resources")
+        raise AssertionError(
+            "local atomic helpers should not run for fsspec-backed resources"
+        )
 
     monkeypatch.setattr(coryl_resources, "_atomic_write_text", fail_atomic)
     monkeypatch.setattr(coryl_resources, "_atomic_write_bytes", fail_atomic)
@@ -232,9 +258,13 @@ def test_fsspec_diskcache_backend_is_local_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fail_dependency_load() -> object:
-        raise AssertionError("diskcache should not be imported for fsspec-backed managers")
+        raise AssertionError(
+            "diskcache should not be imported for fsspec-backed managers"
+        )
 
-    monkeypatch.setattr(coryl_manager, "_load_diskcache_cache_class", fail_dependency_load)
+    monkeypatch.setattr(
+        coryl_manager, "_load_diskcache_cache_class", fail_dependency_load
+    )
 
     with pytest.raises(
         CorylValidationError,
@@ -250,7 +280,9 @@ def test_fsspec_diskcache_backend_is_local_only(
 
 
 def test_fsspec_layered_config_registration_is_local_only(memory_app: Coryl) -> None:
-    with pytest.raises(CorylValidationError, match="register_layered_config\\(\\) currently requires"):
+    with pytest.raises(
+        CorylValidationError, match="register_layered_config\\(\\) currently requires"
+    ):
         memory_app.register_layered_config(
             "settings",
             files=["config/defaults.toml", "config/local.toml"],

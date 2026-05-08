@@ -8,7 +8,11 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-EXAMPLES_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd() / "examples"
+EXAMPLES_DIR = (
+    Path(__file__).resolve().parent
+    if "__file__" in globals()
+    else Path.cwd() / "examples"
+)
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
@@ -68,9 +72,30 @@ def main() -> int:
         write_text(root / ".cache" / "http" / "users" / "42.json", '{"id": 42}')
         write_text(root / "assets" / "ui" / "logo.svg", "<svg></svg>")
 
-        listed = _run_cli(root, "resources", "list", "--manifest", "app.toml", "--root", ".", "--json")
-        checked = _run_cli(root, "resources", "check", "--manifest", "app.toml", "--root", ".", "--json")
-        shown = _run_cli(root, "config", "show", "settings", "--manifest", "app.toml", "--root", ".", "--json")
+        listed = _run_cli(
+            root, "resources", "list", "--manifest", "app.toml", "--root", ".", "--json"
+        )
+        checked = _run_cli(
+            root,
+            "resources",
+            "check",
+            "--manifest",
+            "app.toml",
+            "--root",
+            ".",
+            "--json",
+        )
+        shown = _run_cli(
+            root,
+            "config",
+            "show",
+            "settings",
+            "--manifest",
+            "app.toml",
+            "--root",
+            ".",
+            "--json",
+        )
 
         return emit_json(
             {

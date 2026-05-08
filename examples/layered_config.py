@@ -7,7 +7,11 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 
-EXAMPLES_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd() / "examples"
+EXAMPLES_DIR = (
+    Path(__file__).resolve().parent
+    if "__file__" in globals()
+    else Path.cwd() / "examples"
+)
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 

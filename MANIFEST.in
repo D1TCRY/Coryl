@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include CHANGELOG.md
+graft docs
+graft examples
+graft tests
+prune .pytest_cache
+prune .tox
+prune dist
+prune tmp
+recursive-exclude * __pycache__
+global-exclude *.py[cod]

@@ -48,7 +48,9 @@ class CorylCliTests(unittest.TestCase):
             """
         )
         (self.root / "config").mkdir(parents=True, exist_ok=True)
-        (self.root / "config" / "settings.toml").write_text('theme = "dark"\n', encoding="utf-8")
+        (self.root / "config" / "settings.toml").write_text(
+            'theme = "dark"\n', encoding="utf-8"
+        )
         (self.root / ".cache" / "http").mkdir(parents=True, exist_ok=True)
         (self.root / "assets" / "ui").mkdir(parents=True, exist_ok=True)
 

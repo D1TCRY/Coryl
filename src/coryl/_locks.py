@@ -44,7 +44,9 @@ def managed_lock(path: str | Path, *, timeout: float | None = None) -> Iterator[
 
     try:
         acquire_context = (
-            file_lock.acquire() if timeout is None else file_lock.acquire(timeout=timeout)
+            file_lock.acquire()
+            if timeout is None
+            else file_lock.acquire(timeout=timeout)
         )
         with acquire_context:
             yield lock_path

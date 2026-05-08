@@ -56,7 +56,10 @@ def test_cache_registration_and_child_helpers(app: Coryl, tmp_path: Path) -> Non
     assert entry.path == (tmp_path / ".cache" / "http" / "users" / "42.json").resolve()
     assert entry.path.is_relative_to(added.path)
 
-    assert file_resource.path == (tmp_path / ".cache" / "http" / "tokens" / "state.txt").resolve()
+    assert (
+        file_resource.path
+        == (tmp_path / ".cache" / "http" / "tokens" / "state.txt").resolve()
+    )
     assert file_resource.path.is_file()
     assert file_resource.path.is_relative_to(added.path)
 
@@ -114,7 +117,9 @@ def test_cache_yaml_round_trip_when_yaml_is_available(cache: CacheResource) -> N
     assert "theme: light" in cache.file("config", "settings.yaml").read_text()
 
 
-def test_cache_load_honors_expired_ttl_and_cleans_up(cache: CacheResource, fake_time: dict[str, float]) -> None:
+def test_cache_load_honors_expired_ttl_and_cleans_up(
+    cache: CacheResource, fake_time: dict[str, float]
+) -> None:
     cache.set("tokens/state.txt", "stale", ttl=10)
 
     fake_time["now"] = 1_011.0
@@ -124,7 +129,9 @@ def test_cache_load_honors_expired_ttl_and_cleans_up(cache: CacheResource, fake_
     assert not cache.file("tokens", "state.txt").exists()
 
 
-def test_cache_ttl_persistence_and_expire(cache: CacheResource, fake_time: dict[str, float]) -> None:
+def test_cache_ttl_persistence_and_expire(
+    cache: CacheResource, fake_time: dict[str, float]
+) -> None:
     cache.set("tokens/persistent.txt", "keep")
     cache.set("tokens/fresh.txt", "fresh", ttl=60)
     cache.set("tokens/stale.txt", "stale", ttl=5)
@@ -179,7 +186,9 @@ def test_cache_remember_recomputes_only_for_missing_or_expired_entries(
     fake_time["now"] = 1_011.0
 
     refreshed = cache.remember("users/42.json", factory=build_remember_value, ttl=10)
-    refreshed_json = cache.remember_json("responses/user.json", build_json_value, ttl=10)
+    refreshed_json = cache.remember_json(
+        "responses/user.json", build_json_value, ttl=10
+    )
     refreshed_text = cache.remember_text("tokens/state.txt", build_text_value, ttl=10)
 
     assert refreshed == {"call": 2}
@@ -188,7 +197,9 @@ def test_cache_remember_recomputes_only_for_missing_or_expired_entries(
     assert calls == {"remember": 2, "json": 2, "text": 2}
 
 
-def test_cache_legacy_multipart_remember_and_load_stay_compatible(cache: CacheResource) -> None:
+def test_cache_legacy_multipart_remember_and_load_stay_compatible(
+    cache: CacheResource,
+) -> None:
     returned_path = cache.remember(
         "responses",
         "users.json",

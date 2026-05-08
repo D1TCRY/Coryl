@@ -97,7 +97,7 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:
-    from .exceptions import (
+    from .exceptions import (  # noqa: F401
         CorylError,
         CorylInvalidResourceKindError,
         CorylLockTimeoutError,
@@ -116,7 +116,7 @@ if TYPE_CHECKING:
         UnsupportedFormatError,
         UnsafePathError,
     )
-    from .manager import (
+    from .manager import (  # noqa: F401
         MANIFEST_VERSION,
         AssetNamespace,
         CacheNamespace,
@@ -126,7 +126,7 @@ if TYPE_CHECKING:
         LogNamespace,
         ResourceManager,
     )
-    from .resources import (
+    from .resources import (  # noqa: F401
         AssetGroup,
         CacheResource,
         ConfigResource,

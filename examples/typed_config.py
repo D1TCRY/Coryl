@@ -6,7 +6,11 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 
-EXAMPLES_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd() / "examples"
+EXAMPLES_DIR = (
+    Path(__file__).resolve().parent
+    if "__file__" in globals()
+    else Path.cwd() / "examples"
+)
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
@@ -44,7 +48,9 @@ def main() -> int:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         app = Coryl(root=root)
-        settings = app.configs.add("settings", "config/settings.toml", schema=SettingsModel)
+        settings = app.configs.add(
+            "settings", "config/settings.toml", schema=SettingsModel
+        )
         settings.save_typed(SettingsModel(host="localhost", port=5432, debug=True))
 
         typed_settings = settings.load_typed()

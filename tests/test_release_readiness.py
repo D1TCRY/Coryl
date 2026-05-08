@@ -16,6 +16,8 @@ SRC_ROOT = PROJECT_ROOT / "src"
 README_PATH = PROJECT_ROOT / "README.md"
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 CHANGELOG_PATH = PROJECT_ROOT / "CHANGELOG.md"
+MANIFEST_PATH = PROJECT_ROOT / "MANIFEST.in"
+TOX_PATH = PROJECT_ROOT / "tox.ini"
 
 FAKE_PYDANTIC_MODULE = """
 class ValidationError(Exception):
@@ -56,7 +58,17 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertEqual(project["license-files"], ["LICEN[CS]E*"])
         self.assertEqual(
             set(optional),
-            {"platform", "pydantic", "diskcache", "watch", "fsspec", "lock", "cli", "yaml", "all"},
+            {
+                "platform",
+                "pydantic",
+                "diskcache",
+                "watch",
+                "fsspec",
+                "lock",
+                "cli",
+                "yaml",
+                "all",
+            },
         )
         self.assertIn("PyYAML>=6.0", optional["yaml"])
         self.assertIn("platformdirs>=4", optional["all"])
@@ -69,12 +81,72 @@ class ReleaseReadinessTests(unittest.TestCase):
     def test_changelog_entry_exists_for_current_release(self) -> None:
         changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
 
+        self.assertIn("## 0.0.2 - 2026-05-08", changelog)
+        self.assertIn("coverage, mypy, and Ruff", changelog)
+        self.assertIn("MANIFEST.in", changelog)
+        self.assertIn("YAML-backed fsspec tests", changelog)
+        self.assertIn("No Coryl runtime features or public APIs changed", changelog)
         self.assertIn("## 0.0.1 - 2026-05-08", changelog)
         self.assertIn("Core safety checks", changelog)
         self.assertIn("Atomic writes", changelog)
         self.assertIn("diskcache", changelog)
         self.assertIn("fsspec", changelog)
         self.assertIn("CLI", changelog)
+
+    def test_quality_tooling_and_manifest_policy_are_configured(self) -> None:
+        pyproject = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+        dependency_groups = pyproject["dependency-groups"]
+        coverage_run = pyproject["tool"]["coverage"]["run"]
+        coverage_report = pyproject["tool"]["coverage"]["report"]
+        mypy_config = pyproject["tool"]["mypy"]
+        ruff_config = pyproject["tool"]["ruff"]
+        ruff_lint = ruff_config["lint"]
+
+        self.assertIn("pytest>=8", dependency_groups["test"])
+        self.assertIn("pytest-cov>=5", dependency_groups["test"])
+        self.assertIn("mypy>=1.11,<2", dependency_groups["type"])
+        self.assertIn("ruff>=0.11", dependency_groups["dev"])
+        self.assertIn({"include-group": "test"}, dependency_groups["dev"])
+        self.assertIn({"include-group": "type"}, dependency_groups["dev"])
+
+        self.assertEqual(coverage_run["source"], ["coryl"])
+        self.assertTrue(coverage_run["branch"])
+        self.assertTrue(coverage_report["show_missing"])
+
+        self.assertEqual(mypy_config["python_version"], "3.10")
+        self.assertEqual(mypy_config["files"], ["src/coryl"])
+        self.assertEqual(mypy_config["mypy_path"], ["src"])
+        self.assertTrue(mypy_config["check_untyped_defs"])
+        self.assertTrue(mypy_config["warn_unused_ignores"])
+        self.assertTrue(mypy_config["show_error_codes"])
+        self.assertTrue(mypy_config["ignore_missing_imports"])
+
+        self.assertEqual(ruff_config["target-version"], "py310")
+        self.assertEqual(ruff_config["line-length"], 88)
+        self.assertEqual(ruff_config["src"], ["src", "tests", "examples"])
+        self.assertEqual(ruff_config["extend-exclude"], ["tmp"])
+        self.assertEqual(ruff_lint["select"], ["F"])
+
+        manifest = MANIFEST_PATH.read_text(encoding="utf-8")
+        self.assertIn("include README.md", manifest)
+        self.assertIn("include LICENSE", manifest)
+        self.assertIn("include CHANGELOG.md", manifest)
+        self.assertIn("graft docs", manifest)
+        self.assertIn("graft examples", manifest)
+        self.assertIn("graft tests", manifest)
+        self.assertIn("global-exclude *.py[cod]", manifest)
+
+    def test_fsspec_tox_env_installs_yaml_extra_for_yaml_backed_tests(self) -> None:
+        tox_ini = TOX_PATH.read_text(encoding="utf-8")
+        match = re.search(
+            r"^\[testenv:fsspec\]\s+extras =\s+(?P<extras>.*?)(?:^\[|\Z)",
+            tox_ini,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        extras = match.group("extras")
+        self.assertIn("fsspec", extras)
+        self.assertIn("yaml", extras)
 
     def test_public_package_exports_remain_available(self) -> None:
         import coryl
@@ -206,7 +278,9 @@ class ReleaseReadinessTests(unittest.TestCase):
                     os.chdir(previous_cwd)
             """
         )
-        self.assertEqual(result.stdout.strip(), '{"name": "default-flow", "optional": []}')
+        self.assertEqual(
+            result.stdout.strip(), '{"name": "default-flow", "optional": []}'
+        )
 
     def test_readme_python_examples_run(self) -> None:
         readme = README_PATH.read_text(encoding="utf-8")
@@ -221,9 +295,7 @@ class ReleaseReadinessTests(unittest.TestCase):
                 )
 
     def test_examples_directory_contains_required_files(self) -> None:
-        example_names = {
-            path.name for path in (PROJECT_ROOT / "examples").glob("*.py")
-        }
+        example_names = {path.name for path in (PROJECT_ROOT / "examples").glob("*.py")}
         self.assertTrue(
             {
                 "simple_local_app.py",

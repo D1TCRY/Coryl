@@ -30,7 +30,9 @@ def test_missing_fsspec_dependency_error_is_clear(constructor: object) -> None:
         "coryl._fs.import_module",
         side_effect=ModuleNotFoundError("No module named 'fsspec'"),
     ):
-        with pytest.raises(CorylOptionalDependencyError, match="pip install coryl\\[fsspec\\]") as caught:
+        with pytest.raises(
+            CorylOptionalDependencyError, match="pip install coryl\\[fsspec\\]"
+        ) as caught:
             constructor()
 
     assert str(caught.value) == message

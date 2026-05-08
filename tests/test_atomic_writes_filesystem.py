@@ -20,8 +20,12 @@ def _temporary_files_for(destination: Path) -> list[Path]:
 
 
 WRITE_CASES = [
-    pytest.param("data/notes.txt", "write_text", "read_text", "daily summary", id="text"),
-    pytest.param("data/archive.bin", "write_bytes", "read_bytes", b"\x00\x01coryl", id="bytes"),
+    pytest.param(
+        "data/notes.txt", "write_text", "read_text", "daily summary", id="text"
+    ),
+    pytest.param(
+        "data/archive.bin", "write_bytes", "read_bytes", b"\x00\x01coryl", id="bytes"
+    ),
     pytest.param("data/state.json", "write_json", "read_json", {"count": 1}, id="json"),
     pytest.param(
         "config/settings.toml",
@@ -40,7 +44,9 @@ WRITE_CASES = [
 ]
 
 
-@pytest.mark.parametrize(("relative_path", "writer_name", "reader_name", "payload"), WRITE_CASES)
+@pytest.mark.parametrize(
+    ("relative_path", "writer_name", "reader_name", "payload"), WRITE_CASES
+)
 def test_write_helpers_save_expected_data_and_clean_up_temp_files(
     tmp_path: Path,
     relative_path: str,
@@ -73,13 +79,17 @@ def test_write_helpers_save_expected_data_and_clean_up_temp_files(
         pytest.param(ConfigResource, "save", id="config-save"),
     ],
 )
-def test_atomic_argument_defaults_to_true(resource_class: type[object], method_name: str) -> None:
+def test_atomic_argument_defaults_to_true(
+    resource_class: type[object], method_name: str
+) -> None:
     method = getattr(resource_class, method_name)
 
     assert inspect.signature(method).parameters["atomic"].default is True
 
 
-def test_atomic_false_uses_the_non_atomic_write_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_atomic_false_uses_the_non_atomic_write_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     app = Coryl(root=tmp_path, create_missing=False)
     resource = app.register_file("notes", "data/notes.txt", create=False)
 

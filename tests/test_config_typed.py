@@ -58,7 +58,9 @@ def fake_pydantic_module() -> SimpleNamespace:
     )
 
 
-def _patch_optional_import(monkeypatch: pytest.MonkeyPatch, *, module_name: str, module: object) -> None:
+def _patch_optional_import(
+    monkeypatch: pytest.MonkeyPatch, *, module_name: str, module: object
+) -> None:
     original_import_module = coryl_resources.import_module
 
     def fake_import(name: str, package: str | None = None) -> object:
@@ -74,7 +76,9 @@ def test_typed_config_load_typed_supports_explicit_model_and_registered_schema(
     monkeypatch: pytest.MonkeyPatch,
     fake_pydantic_module: SimpleNamespace,
 ) -> None:
-    _patch_optional_import(monkeypatch, module_name="pydantic", module=fake_pydantic_module)
+    _patch_optional_import(
+        monkeypatch, module_name="pydantic", module=fake_pydantic_module
+    )
 
     app = Coryl(tmp_path)
     explicit = app.configs.add("explicit", "config/explicit.toml")
@@ -102,7 +106,9 @@ def test_typed_config_save_typed_round_trips_model_instances(
     monkeypatch: pytest.MonkeyPatch,
     fake_pydantic_module: SimpleNamespace,
 ) -> None:
-    _patch_optional_import(monkeypatch, module_name="pydantic", module=fake_pydantic_module)
+    _patch_optional_import(
+        monkeypatch, module_name="pydantic", module=fake_pydantic_module
+    )
 
     app = Coryl(tmp_path)
     settings = app.configs.add("settings", "config/settings.toml")
@@ -118,7 +124,9 @@ def test_typed_config_validation_failures_raise_coryl_validation_error(
     monkeypatch: pytest.MonkeyPatch,
     fake_pydantic_module: SimpleNamespace,
 ) -> None:
-    _patch_optional_import(monkeypatch, module_name="pydantic", module=fake_pydantic_module)
+    _patch_optional_import(
+        monkeypatch, module_name="pydantic", module=fake_pydantic_module
+    )
 
     app = Coryl(tmp_path)
     settings = app.configs.add("settings", "config/settings.toml")
@@ -151,8 +159,12 @@ def test_typed_config_helpers_raise_clear_optional_dependency_errors_when_missin
     settings.save({"host": "localhost", "port": 5432})
     instance = fake_pydantic_module.SettingsModel("localhost", 5432, True)
 
-    with pytest.raises(CorylOptionalDependencyError, match=r"pip install coryl\[pydantic\]"):
+    with pytest.raises(
+        CorylOptionalDependencyError, match=r"pip install coryl\[pydantic\]"
+    ):
         settings.load_typed()
 
-    with pytest.raises(CorylOptionalDependencyError, match=r"pip install coryl\[pydantic\]"):
+    with pytest.raises(
+        CorylOptionalDependencyError, match=r"pip install coryl\[pydantic\]"
+    ):
         settings.save_typed(instance)

@@ -2,6 +2,16 @@
 
 All notable changes to Coryl will be documented in this file.
 
+## 0.0.2 - 2026-05-08
+
+### Changed
+
+- Added explicit release-quality tooling config for coverage, mypy, and Ruff.
+- Added an explicit `MANIFEST.in` so sdists include docs, examples, tests, and release metadata while wheels stay runtime-minimal.
+- Updated the `tox` `fsspec` environment to install the separate `yaml` extra so YAML-backed fsspec tests run there.
+- Removed tracked bytecode/build artifacts and added ignore rules for generated QA/build output.
+- No Coryl runtime features or public APIs changed in this release.
+
 ## 0.0.1 - 2026-05-08
 
 ### Added
@@ -23,4 +33,3 @@ All notable changes to Coryl will be documented in this file.
 
 - The default `Coryl(root=".")` flow stays local, lightweight, and dependency-minimal.
 - Optional integrations are imported only when the matching feature is used.
-

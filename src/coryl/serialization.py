@@ -113,7 +113,9 @@ def dumps_toml(content: object) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_toml_table(table: Mapping[str, object], prefix: tuple[str, ...]) -> list[str]:
+def _render_toml_table(
+    table: Mapping[str, object], prefix: tuple[str, ...]
+) -> list[str]:
     lines: list[str] = []
     if prefix:
         dotted_key = ".".join(_format_toml_key(part) for part in prefix)
@@ -151,7 +153,9 @@ def _render_toml_table(table: Mapping[str, object], prefix: tuple[str, ...]) -> 
     return lines
 
 
-def _render_toml_body(table: Mapping[str, object], prefix: tuple[str, ...]) -> list[str]:
+def _render_toml_body(
+    table: Mapping[str, object], prefix: tuple[str, ...]
+) -> list[str]:
     lines: list[str] = []
     scalar_items: list[tuple[str, object]] = []
     child_tables: list[tuple[str, Mapping[str, object]]] = []
@@ -211,7 +215,9 @@ def _format_toml_value(value: object) -> str:
     if value is None:
         raise TypeError("TOML does not support null values.")
     if isinstance(value, Mapping):
-        raise TypeError("Nested mappings must be emitted as TOML tables, not inline values.")
+        raise TypeError(
+            "Nested mappings must be emitted as TOML tables, not inline values."
+        )
     if isinstance(value, list):
         if any(isinstance(item, Mapping) for item in value):
             raise TypeError("Lists of mappings must be emitted as TOML array tables.")
@@ -222,10 +228,16 @@ def _format_toml_value(value: object) -> str:
 
 
 def _is_array_of_tables(value: object) -> bool:
-    return isinstance(value, list) and bool(value) and all(isinstance(item, Mapping) for item in value)
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, Mapping) for item in value)
+    )
 
 
-def _json_unique_object_pairs_hook(pairs: list[tuple[object, object]]) -> dict[object, object]:
+def _json_unique_object_pairs_hook(
+    pairs: list[tuple[object, object]],
+) -> dict[object, object]:
     return _mapping_from_unique_pairs(pairs, source="JSON object")
 
 

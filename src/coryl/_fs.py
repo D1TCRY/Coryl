@@ -7,7 +7,7 @@ from importlib import import_module
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, Literal
 
-from ._paths import ManagedPath, resolve_managed_path, validate_managed_path_input
+from ._paths import resolve_managed_path, validate_managed_path_input
 from .exceptions import CorylOptionalDependencyError, CorylValidationError
 
 FilesystemName = Literal["local", "fsspec"]
@@ -66,7 +66,9 @@ class LocalFS:
     def read_text(self, path: str | PurePath, *, encoding: str = "utf-8") -> str:
         return Path(path).read_text(encoding=encoding)
 
-    def write_text(self, path: str | PurePath, text: str, *, encoding: str = "utf-8") -> Path:
+    def write_text(
+        self, path: str | PurePath, text: str, *, encoding: str = "utf-8"
+    ) -> Path:
         candidate = Path(path)
         candidate.parent.mkdir(parents=True, exist_ok=True)
         candidate.write_text(text, encoding=encoding)
@@ -172,7 +174,9 @@ class FsspecFS:
         return candidate
 
     def read_text(self, path: str | PurePath, *, encoding: str = "utf-8") -> str:
-        with self._filesystem.open(self._backend_path(path), "rt", encoding=encoding) as handle:
+        with self._filesystem.open(
+            self._backend_path(path), "rt", encoding=encoding
+        ) as handle:
             return handle.read()
 
     def write_text(
@@ -184,7 +188,9 @@ class FsspecFS:
     ) -> PurePosixPath:
         candidate = self._coerce_logical_path(path)
         self.mkdir(candidate.parent, parents=True, exist_ok=True)
-        with self._filesystem.open(self._backend_path(candidate), "wt", encoding=encoding) as handle:
+        with self._filesystem.open(
+            self._backend_path(candidate), "wt", encoding=encoding
+        ) as handle:
             handle.write(text)
         return candidate
 
@@ -206,7 +212,9 @@ class FsspecFS:
 
     def remove(self, path: str | PurePath) -> None:
         candidate = self._coerce_logical_path(path)
-        self._filesystem.rm(self._backend_path(candidate), recursive=self.is_dir(candidate))
+        self._filesystem.rm(
+            self._backend_path(candidate), recursive=self.is_dir(candidate)
+        )
 
     def display_path(self, path: str | PurePath) -> str:
         logical_path = self._coerce_logical_path(path)
@@ -258,7 +266,9 @@ def create_filesystem(
     return FsspecFS(root, protocol=protocol)
 
 
-def _normalize_fsspec_root(root: str | Path, *, protocol: str | None) -> tuple[str, str]:
+def _normalize_fsspec_root(
+    root: str | Path, *, protocol: str | None
+) -> tuple[str, str]:
     root_text = str(root).strip()
     if not root_text:
         raise TypeError("fsspec-backed Coryl requires a non-empty root.")

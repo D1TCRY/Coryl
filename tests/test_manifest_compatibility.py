@@ -19,7 +19,9 @@ FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "manifests"
 YAML_AVAILABLE = importlib.util.find_spec("yaml") is not None
 
 
-def _copy_manifest_fixture(tmp_path: Path, fixture_name: str, *, target_name: str | None = None) -> Path:
+def _copy_manifest_fixture(
+    tmp_path: Path, fixture_name: str, *, target_name: str | None = None
+) -> Path:
     source = FIXTURE_ROOT / fixture_name
     destination = tmp_path / (target_name or source.name)
     shutil.copyfile(source, destination)
@@ -59,7 +61,9 @@ def _assert_loaded_v2_manifest(app: Coryl, tmp_path: Path) -> None:
         pytest.param(
             "v2.yaml",
             "app.yaml",
-            marks=pytest.mark.skipif(not YAML_AVAILABLE, reason="PyYAML is not installed"),
+            marks=pytest.mark.skipif(
+                not YAML_AVAILABLE, reason="PyYAML is not installed"
+            ),
         ),
     ],
 )
@@ -68,7 +72,9 @@ def test_v2_manifest_fixtures_load_via_constructor_and_load_manifest(
     fixture_name: str,
     target_name: str,
 ) -> None:
-    manifest_path = _copy_manifest_fixture(tmp_path, fixture_name, target_name=target_name)
+    manifest_path = _copy_manifest_fixture(
+        tmp_path, fixture_name, target_name=target_name
+    )
 
     app = Coryl(root=tmp_path, manifest_path=manifest_path.name)
 
@@ -84,7 +90,9 @@ def test_v2_manifest_fixtures_load_via_constructor_and_load_manifest(
 
 
 def test_legacy_manifest_fixture_preserves_compatibility(tmp_path: Path) -> None:
-    manifest_path = _copy_manifest_fixture(tmp_path, "legacy.json", target_name="app.json")
+    manifest_path = _copy_manifest_fixture(
+        tmp_path, "legacy.json", target_name="app.json"
+    )
 
     app = Coryl(root=tmp_path, manifest_path=manifest_path.name)
 
@@ -116,7 +124,13 @@ role = "config"
 @pytest.mark.parametrize(
     ("resource_name", "path_value", "kind", "role", "message"),
     [
-        ("settings", "config", "directory", "config", "Config resources must be files."),
+        (
+            "settings",
+            "config",
+            "directory",
+            "config",
+            "Config resources must be files.",
+        ),
         (
             "http_cache",
             ".cache/http.db",
@@ -124,7 +138,13 @@ role = "config"
             "cache",
             "Cache and asset resources must be directories.",
         ),
-        ("ui", "assets/logo.svg", "file", "assets", "Cache and asset resources must be directories."),
+        (
+            "ui",
+            "assets/logo.svg",
+            "file",
+            "assets",
+            "Cache and asset resources must be directories.",
+        ),
     ],
 )
 def test_manifest_rejects_invalid_role_kind_combinations(
@@ -211,7 +231,9 @@ def test_audit_paths_includes_manifest_and_imperative_resources(tmp_path: Path) 
     assert audit["resources"]["extra_cache"]["exists"] is False
 
 
-def test_manifest_loaded_diskcache_backend_stays_lazy_until_used(tmp_path: Path) -> None:
+def test_manifest_loaded_diskcache_backend_stays_lazy_until_used(
+    tmp_path: Path,
+) -> None:
     manifest_path = _copy_manifest_fixture(tmp_path, "v2.toml", target_name="app.toml")
     app = Coryl(root=tmp_path, manifest_path=manifest_path.name)
     cache = app.caches.get("http_cache")

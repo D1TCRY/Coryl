@@ -41,7 +41,9 @@ def test_readonly_directory_cannot_create_child_write_target(tmp_path: Path) -> 
         assets.joinpath("new.txt", kind="file", create=True)
 
 
-def test_readonly_config_cannot_save_update_or_migrate_but_can_load(tmp_path: Path) -> None:
+def test_readonly_config_cannot_save_update_or_migrate_but_can_load(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config" / "settings.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(

@@ -81,7 +81,9 @@ def test_layered_config_merges_files_secrets_environment_and_runtime_in_order(
     }
 
 
-def test_layered_config_deep_merges_dicts_and_replaces_lists_and_scalars(tmp_path) -> None:
+def test_layered_config_deep_merges_dicts_and_replaces_lists_and_scalars(
+    tmp_path,
+) -> None:
     config_dir = tmp_path / "config"
     _write_text(
         config_dir / "defaults.toml",

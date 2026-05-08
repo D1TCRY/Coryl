@@ -98,7 +98,9 @@ def _coerce_managed_path(
     if path_style == "local":
         return Path(path_value)
 
-    raw_text = path_value.as_posix() if isinstance(path_value, PurePath) else str(path_value)
+    raw_text = (
+        path_value.as_posix() if isinstance(path_value, PurePath) else str(path_value)
+    )
     return PurePosixPath(raw_text.replace("\\", "/"))
 
 

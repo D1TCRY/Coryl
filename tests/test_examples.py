@@ -188,7 +188,9 @@ def _assert_fsspec_memory(payload: dict[str, object]) -> None:
 def _assert_diagnostics_cli(payload: dict[str, object]) -> None:
     assert payload["returncodes"] == {"check": 0, "list": 0, "show": 0}
     assert payload["resources_check"]["ok"] is True
-    assert [resource["name"] for resource in payload["resources_list"]["resources"]] == [
+    assert [
+        resource["name"] for resource in payload["resources_list"]["resources"]
+    ] == [
         "http_cache",
         "settings",
         "ui",
@@ -218,9 +220,7 @@ VALIDATORS: dict[str, Callable[[dict[str, object]], None]] = {
 
 def test_example_registry_matches_scripts() -> None:
     discovered = sorted(
-        path.name
-        for path in EXAMPLES_DIR.glob("*.py")
-        if not path.name.startswith("_")
+        path.name for path in EXAMPLES_DIR.glob("*.py") if not path.name.startswith("_")
     )
 
     assert discovered == sorted(VALIDATORS)

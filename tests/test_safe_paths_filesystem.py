@@ -137,7 +137,9 @@ def test_normalizing_back_inside_root_is_still_rejected(
         app.register_file("sample", relative_path)
 
 
-def test_child_paths_from_directory_resources_cannot_escape_parent(tmp_path: Path) -> None:
+def test_child_paths_from_directory_resources_cannot_escape_parent(
+    tmp_path: Path,
+) -> None:
     app = Coryl(root=tmp_path)
     assets = app.register_assets("assets", "assets")
 

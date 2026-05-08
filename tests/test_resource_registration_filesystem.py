@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from coryl import AssetGroup, CacheResource, ConfigResource, Coryl, Resource, ResourceSpec
+from coryl import (
+    AssetGroup,
+    CacheResource,
+    ConfigResource,
+    Coryl,
+    Resource,
+    ResourceSpec,
+)
 
 
 @pytest.mark.parametrize(

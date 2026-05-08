@@ -70,7 +70,9 @@ def test_config_migration_missing_path_raises_clear_error(tmp_path) -> None:
         settings.migrate()
 
 
-def test_config_migration_saves_atomically_and_skips_rewrite_when_already_current(tmp_path) -> None:
+def test_config_migration_saves_atomically_and_skips_rewrite_when_already_current(
+    tmp_path,
+) -> None:
     app = Coryl(tmp_path)
 
     migrates = app.configs.add("migrates", "config/migrates.toml", version=2)
@@ -105,7 +107,9 @@ def test_config_migration_saves_atomically_and_skips_rewrite_when_already_curren
     assert migrated == {"version": 2, "theme": "light"}
 
 
-def test_config_migration_rejects_readonly_targets_and_invalid_return_values(tmp_path) -> None:
+def test_config_migration_rejects_readonly_targets_and_invalid_return_values(
+    tmp_path,
+) -> None:
     readonly_path = tmp_path / "config" / "readonly.toml"
     _write_text(
         readonly_path,
@@ -116,7 +120,9 @@ def test_config_migration_rejects_readonly_targets_and_invalid_return_values(tmp
     )
 
     app = Coryl(tmp_path)
-    readonly = app.register_config("readonly", "config/readonly.toml", readonly=True, version=2)
+    readonly = app.register_config(
+        "readonly", "config/readonly.toml", readonly=True, version=2
+    )
 
     @readonly.migration(from_version=1, to_version=2)
     def migrate_readonly(document: dict[str, object]) -> dict[str, object]:

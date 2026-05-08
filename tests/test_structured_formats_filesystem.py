@@ -38,7 +38,9 @@ def test_toml_read_write_round_trip(tmp_path: Path) -> None:
     assert settings.read_toml() == payload
 
 
-def test_yaml_read_write_round_trip_when_yaml_support_is_installed(tmp_path: Path) -> None:
+def test_yaml_read_write_round_trip_when_yaml_support_is_installed(
+    tmp_path: Path,
+) -> None:
     pytest.importorskip("yaml")
     app = Coryl(root=tmp_path)
     settings = app.register_file("settings", "config/settings.yaml")

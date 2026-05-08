@@ -81,10 +81,18 @@ def test_diskcache_remember_helpers_and_memoize(tmp_path: Path) -> None:
 
     assert cache.remember("users/42.json", factory=build_payload, ttl=60) == {"call": 1}
     assert cache.remember("users/42.json", factory=build_payload, ttl=60) == {"call": 1}
-    assert cache.remember_json("responses/user.json", build_json_payload, ttl=60) == {"call": 1}
-    assert cache.remember_json("responses/user.json", build_json_payload, ttl=60) == {"call": 1}
-    assert cache.remember_text("tokens/state.txt", build_text_payload, ttl=60) == "text-1"
-    assert cache.remember_text("tokens/state.txt", build_text_payload, ttl=60) == "text-1"
+    assert cache.remember_json("responses/user.json", build_json_payload, ttl=60) == {
+        "call": 1
+    }
+    assert cache.remember_json("responses/user.json", build_json_payload, ttl=60) == {
+        "call": 1
+    }
+    assert (
+        cache.remember_text("tokens/state.txt", build_text_payload, ttl=60) == "text-1"
+    )
+    assert (
+        cache.remember_text("tokens/state.txt", build_text_payload, ttl=60) == "text-1"
+    )
 
     @cache.memoize(ttl=60)
     def compute(user_id: int) -> dict[str, object]:

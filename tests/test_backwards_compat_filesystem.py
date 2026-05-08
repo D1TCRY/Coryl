@@ -25,7 +25,9 @@ def test_legacy_path_aliases_and_dynamic_helpers(tmp_path: Path) -> None:
         _ = app.assets_file_path
 
 
-def test_manifest_compatibility_helpers_reload_the_manifest_file(tmp_path: Path) -> None:
+def test_manifest_compatibility_helpers_reload_the_manifest_file(
+    tmp_path: Path,
+) -> None:
     manifest_path = tmp_path / "app.toml"
     manifest_path.write_text(
         (

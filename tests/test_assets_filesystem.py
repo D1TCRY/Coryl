@@ -12,7 +12,9 @@ def _relative_paths(paths: list[Path], *, root: Path) -> list[str]:
     return sorted(path.relative_to(root).as_posix() for path in paths)
 
 
-def test_filesystem_assets_support_registration_and_lookup_helpers(tmp_path: Path) -> None:
+def test_filesystem_assets_support_registration_and_lookup_helpers(
+    tmp_path: Path,
+) -> None:
     app = Coryl(root=tmp_path)
 
     assets = app.assets.add("ui", "assets/ui")
@@ -40,7 +42,9 @@ def test_filesystem_assets_support_registration_and_lookup_helpers(tmp_path: Pat
     ]
 
 
-def test_filesystem_asset_require_for_missing_child_raises_clear_error(tmp_path: Path) -> None:
+def test_filesystem_asset_require_for_missing_child_raises_clear_error(
+    tmp_path: Path,
+) -> None:
     app = Coryl(root=tmp_path)
     assets = app.assets.add("ui", "assets/ui")
     missing_path = assets.path / "missing.txt"

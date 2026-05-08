@@ -97,7 +97,9 @@ def _run_cli(
             for relative_path, content in modules.items():
                 destination = module_root / relative_path
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
+                destination.write_text(
+                    textwrap.dedent(content).lstrip(), encoding="utf-8"
+                )
             pythonpath_parts.insert(0, str(module_root))
 
         existing_pythonpath = os.environ.get("PYTHONPATH")
@@ -136,12 +138,16 @@ def _run_cli(
             builtins.__import__ = blocked_import
             """
         )
-        command = bootstrap + "\n" + textwrap.dedent(
-            f"""
+        command = (
+            bootstrap
+            + "\n"
+            + textwrap.dedent(
+                f"""
             from coryl.cli import main
 
             raise SystemExit(main({list(args)!r}))
             """
+            )
         )
         return subprocess.run(
             [sys.executable, "-c", command],
@@ -159,17 +165,27 @@ def _run_cli(
 def test_cli_subcommands_work_with_manifest_and_root_flags(tmp_path: Path) -> None:
     _prepare_standard_root(tmp_path)
 
-    listed = _run_cli(tmp_path, "resources", "list", "--manifest", "app.toml", "--root", ".")
+    listed = _run_cli(
+        tmp_path, "resources", "list", "--manifest", "app.toml", "--root", "."
+    )
     assert listed.returncode == 0
     assert listed.stderr == ""
     list_lines = listed.stdout.strip().splitlines()
     assert list_lines[0].split() == ["name", "role", "kind", "exists", "safe", "path"]
-    assert [line.split()[0] for line in list_lines[2:]] == ["http_cache", "settings", "ui"]
+    assert [line.split()[0] for line in list_lines[2:]] == [
+        "http_cache",
+        "settings",
+        "ui",
+    ]
 
-    checked = _run_cli(tmp_path, "resources", "check", "--manifest", "app.toml", "--root", ".")
+    checked = _run_cli(
+        tmp_path, "resources", "check", "--manifest", "app.toml", "--root", "."
+    )
     assert checked.returncode == 0
     assert checked.stderr == ""
-    assert checked.stdout.strip().splitlines()[-1] == "All resources are present and safe."
+    assert (
+        checked.stdout.strip().splitlines()[-1] == "All resources are present and safe."
+    )
 
     shown = _run_cli(
         tmp_path,
@@ -223,8 +239,26 @@ def test_cli_json_output_is_valid_for_every_command(tmp_path: Path) -> None:
     commands = [
         ("resources", "list", "--manifest", "app.toml", "--root", ".", "--json"),
         ("resources", "check", "--manifest", "app.toml", "--root", ".", "--json"),
-        ("config", "show", "settings", "--manifest", "app.toml", "--root", ".", "--json"),
-        ("cache", "clear", "http_cache", "--manifest", "app.toml", "--root", ".", "--json"),
+        (
+            "config",
+            "show",
+            "settings",
+            "--manifest",
+            "app.toml",
+            "--root",
+            ".",
+            "--json",
+        ),
+        (
+            "cache",
+            "clear",
+            "http_cache",
+            "--manifest",
+            "app.toml",
+            "--root",
+            ".",
+            "--json",
+        ),
         ("assets", "list", "ui", "--manifest", "app.toml", "--root", ".", "--json"),
     ]
 
@@ -263,7 +297,9 @@ role = "config"
         encoding="utf-8",
     )
 
-    result = _run_cli(tmp_path, "resources", "list", "--manifest", "app.toml", "--root", ".")
+    result = _run_cli(
+        tmp_path, "resources", "list", "--manifest", "app.toml", "--root", "."
+    )
 
     assert result.returncode == 1
     assert result.stdout == ""
@@ -288,7 +324,10 @@ def test_cli_resources_commands_do_not_require_diskcache_dependency_for_manifest
     )
     assert listed.returncode == 0, listed.stderr
     payload = json.loads(listed.stdout)
-    assert [resource["name"] for resource in payload["resources"]] == ["http_cache", "settings"]
+    assert [resource["name"] for resource in payload["resources"]] == [
+        "http_cache",
+        "settings",
+    ]
 
     shown = _run_cli(
         tmp_path,
@@ -306,7 +345,9 @@ def test_cli_resources_commands_do_not_require_diskcache_dependency_for_manifest
     assert json.loads(shown.stdout)["config"]["theme"] == "dark"
 
 
-def test_cli_cache_clear_requires_diskcache_when_backend_is_selected(tmp_path: Path) -> None:
+def test_cli_cache_clear_requires_diskcache_when_backend_is_selected(
+    tmp_path: Path,
+) -> None:
     _write_diskcache_manifest(tmp_path)
 
     result = _run_cli(

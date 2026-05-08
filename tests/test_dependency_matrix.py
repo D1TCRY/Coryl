@@ -196,7 +196,15 @@ class DependencyMatrixTests(unittest.TestCase):
                 finally:
                     os.chdir(previous_cwd)
             """,
-            blocked=("yaml", "pydantic", "platformdirs", "diskcache", "watchfiles", "fsspec", "filelock"),
+            blocked=(
+                "yaml",
+                "pydantic",
+                "platformdirs",
+                "diskcache",
+                "watchfiles",
+                "fsspec",
+                "filelock",
+            ),
         )
 
     def test_yaml_extra_can_be_used_without_other_optionals(self) -> None:
@@ -218,7 +226,14 @@ class DependencyMatrixTests(unittest.TestCase):
                 finally:
                     os.chdir(previous_cwd)
             """,
-            blocked=("pydantic", "platformdirs", "diskcache", "watchfiles", "fsspec", "filelock"),
+            blocked=(
+                "pydantic",
+                "platformdirs",
+                "diskcache",
+                "watchfiles",
+                "fsspec",
+                "filelock",
+            ),
             modules={"yaml.py": FAKE_YAML_MODULE},
         )
 
@@ -245,7 +260,15 @@ class DependencyMatrixTests(unittest.TestCase):
                 finally:
                     os.chdir(previous_cwd)
             """,
-            blocked=("yaml", "pydantic", "platformdirs", "diskcache", "watchfiles", "fsspec", "filelock"),
+            blocked=(
+                "yaml",
+                "pydantic",
+                "platformdirs",
+                "diskcache",
+                "watchfiles",
+                "fsspec",
+                "filelock",
+            ),
         )
 
     def test_pydantic_extra_can_be_used_without_other_optionals(self) -> None:
@@ -271,7 +294,14 @@ class DependencyMatrixTests(unittest.TestCase):
                 settings.save_typed(typed)
                 assert settings.load()["debug"] is True
             """,
-            blocked=("yaml", "platformdirs", "diskcache", "watchfiles", "fsspec", "filelock"),
+            blocked=(
+                "yaml",
+                "platformdirs",
+                "diskcache",
+                "watchfiles",
+                "fsspec",
+                "filelock",
+            ),
             modules={"pydantic.py": FAKE_PYDANTIC_MODULE},
         )
 
@@ -291,7 +321,14 @@ class DependencyMatrixTests(unittest.TestCase):
                 assert settings.path == (root / "config" / "settings.toml").resolve()
                 assert cache.path == (root / "cache" / "http").resolve()
                 """,
-                blocked=("yaml", "pydantic", "diskcache", "watchfiles", "fsspec", "filelock"),
+                blocked=(
+                    "yaml",
+                    "pydantic",
+                    "diskcache",
+                    "watchfiles",
+                    "fsspec",
+                    "filelock",
+                ),
                 modules={"platformdirs.py": FAKE_PLATFORMDIRS_MODULE},
                 env_updates={"CORYL_PLATFORM_ROOT": temp_dir},
             )
@@ -310,7 +347,14 @@ class DependencyMatrixTests(unittest.TestCase):
                 assert cache.get("users:42")["id"] == 42
                 assert cache.remember_json("users/7.json", lambda: {"id": 7})["id"] == 7
             """,
-            blocked=("yaml", "pydantic", "platformdirs", "watchfiles", "fsspec", "filelock"),
+            blocked=(
+                "yaml",
+                "pydantic",
+                "platformdirs",
+                "watchfiles",
+                "fsspec",
+                "filelock",
+            ),
             modules={"diskcache.py": FAKE_DISKCACHE_MODULE},
         )
 
@@ -327,7 +371,9 @@ class DependencyMatrixTests(unittest.TestCase):
             for relative_path, content in (modules or {}).items():
                 destination = module_root / relative_path
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
+                destination.write_text(
+                    textwrap.dedent(content).lstrip(), encoding="utf-8"
+                )
 
             pythonpath_parts = [str(module_root), str(SRC_ROOT)]
             existing_pythonpath = os.environ.get("PYTHONPATH")

@@ -7,7 +7,11 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-EXAMPLES_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd() / "examples"
+EXAMPLES_DIR = (
+    Path(__file__).resolve().parent
+    if "__file__" in globals()
+    else Path.cwd() / "examples"
+)
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
@@ -35,7 +39,9 @@ def main() -> int:
         sys.modules.pop(package_name, None)
         try:
             app = Coryl(root=root)
-            assets = app.assets.from_package("templates", package_name, "assets/templates")
+            assets = app.assets.from_package(
+                "templates", package_name, "assets/templates"
+            )
             template = assets.file("email.html")
 
             with template.as_file() as path:

@@ -6,7 +6,11 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 
-EXAMPLES_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd() / "examples"
+EXAMPLES_DIR = (
+    Path(__file__).resolve().parent
+    if "__file__" in globals()
+    else Path.cwd() / "examples"
+)
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
@@ -28,7 +32,9 @@ def main() -> int:
             """,
         )
         write_text(root / "run" / "secrets" / "api_token", "top-secret")
-        write_text(root / "mounted" / "assets" / "ui" / "logo.svg", "<svg>mounted</svg>")
+        write_text(
+            root / "mounted" / "assets" / "ui" / "logo.svg", "<svg>mounted</svg>"
+        )
 
         app = Coryl(root=root)
         settings = app.configs.layered(

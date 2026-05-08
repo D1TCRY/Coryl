@@ -174,7 +174,9 @@ class CorylTests(unittest.TestCase):
         data = app.data.add("state", "state.json")
         log = app.logs.add("main", "app.log")
 
-        self.assertEqual(settings.path, (platform_roots["config"] / "settings.toml").resolve())
+        self.assertEqual(
+            settings.path, (platform_roots["config"] / "settings.toml").resolve()
+        )
         self.assertEqual(cache.path, (platform_roots["cache"] / "http").resolve())
         self.assertEqual(data.path, (platform_roots["data"] / "state.json").resolve())
         self.assertEqual(log.path, (platform_roots["log"] / "app.log").resolve())
@@ -192,7 +194,9 @@ class CorylTests(unittest.TestCase):
     def test_registration_methods_reject_traversal(self) -> None:
         manager = Coryl(self.root)
         cases = {
-            "register_file": lambda: manager.register_file("notes", "data/../notes.txt"),
+            "register_file": lambda: manager.register_file(
+                "notes", "data/../notes.txt"
+            ),
             "register_directory": lambda: manager.register_directory(
                 "exports", "build/../exports"
             ),
@@ -200,7 +204,9 @@ class CorylTests(unittest.TestCase):
                 "settings", "config/../settings.toml"
             ),
             "register_cache": lambda: manager.register_cache("cache", ".cache/../http"),
-            "register_assets": lambda: manager.register_assets("assets", "assets/../ui"),
+            "register_assets": lambda: manager.register_assets(
+                "assets", "assets/../ui"
+            ),
             "resource_spec": lambda: manager.register(
                 "logs",
                 ResourceSpec.file("runtime/../logs.json"),
@@ -361,7 +367,9 @@ class CorylTests(unittest.TestCase):
         settings = manager.register_file("settings", "config/settings.json")
         calls: list[tuple[tuple[Path, ...], dict[str, object]]] = []
 
-        def fake_watch(*paths: Path, **kwargs: object) -> Iterator[set[tuple[str, str]]]:
+        def fake_watch(
+            *paths: Path, **kwargs: object
+        ) -> Iterator[set[tuple[str, str]]]:
             calls.append((paths, dict(kwargs)))
             yield {
                 ("modified", str(settings.path)),
@@ -388,7 +396,9 @@ class CorylTests(unittest.TestCase):
         assets = manager.register_directory("assets", "assets")
         calls: list[tuple[tuple[Path, ...], dict[str, object]]] = []
 
-        def fake_watch(*paths: Path, **kwargs: object) -> Iterator[set[tuple[str, str]]]:
+        def fake_watch(
+            *paths: Path, **kwargs: object
+        ) -> Iterator[set[tuple[str, str]]]:
             calls.append((paths, dict(kwargs)))
             yield {("added", str(assets.path / "images" / "logo.svg"))}
 
@@ -471,7 +481,9 @@ class CorylTests(unittest.TestCase):
         settings.save({"theme": "light"})
         calls: list[tuple[tuple[Path, ...], dict[str, object]]] = []
 
-        def fake_watch(*paths: Path, **kwargs: object) -> Iterator[set[tuple[str, str]]]:
+        def fake_watch(
+            *paths: Path, **kwargs: object
+        ) -> Iterator[set[tuple[str, str]]]:
             calls.append((paths, dict(kwargs)))
             settings.save({"theme": "dark"})
             yield {("modified", str(settings.path))}
@@ -497,7 +509,9 @@ class CorylTests(unittest.TestCase):
         settings = manager.configs.add("settings", "config/settings.json")
         callback = mock.Mock()
 
-        def fake_watch(*paths: Path, **kwargs: object) -> Iterator[set[tuple[str, str]]]:
+        def fake_watch(
+            *paths: Path, **kwargs: object
+        ) -> Iterator[set[tuple[str, str]]]:
             del paths, kwargs
             settings.save({"theme": "dark"})
             yield {("modified", str(settings.path))}
@@ -636,7 +650,9 @@ class CorylTests(unittest.TestCase):
         def migrate_v2_to_v3(data: dict[str, object]) -> dict[str, object]:
             appearance = data.setdefault("appearance", {})
             if not isinstance(appearance, dict):
-                raise AssertionError("appearance should be a dict during the migration test.")
+                raise AssertionError(
+                    "appearance should be a dict during the migration test."
+                )
             appearance["mode"] = "system"
             return data
 
@@ -725,7 +741,9 @@ token: base-token
         )
 
         self.assertIsInstance(settings, LayeredConfigResource)
-        self.assertEqual(settings.load_base(), {"theme": "light", "token": "base-token"})
+        self.assertEqual(
+            settings.load_base(), {"theme": "light", "token": "base-token"}
+        )
         self.assertEqual(
             settings.load(),
             {"theme": "light", "token": "secret-token", "region": "eu-west-1"},
@@ -780,7 +798,9 @@ password = "top-secret"
             secrets="config/.secrets.toml",
         )
 
-        with mock.patch.dict(os.environ, {"MYAPP_DATABASE__HOST": "env-host"}, clear=False):
+        with mock.patch.dict(
+            os.environ, {"MYAPP_DATABASE__HOST": "env-host"}, clear=False
+        ):
             settings.override({"database.host": "runtime-host"})
             loaded = settings.as_dict()
 
@@ -1010,7 +1030,9 @@ ports = [5432, 5433]
             files=["config/defaults.json", "config/local.json"],
         )
 
-        settings.save({"theme": "dark", "database": {"host": "saved-host", "port": 6432}})
+        settings.save(
+            {"theme": "dark", "database": {"host": "saved-host", "port": 6432}}
+        )
         settings.update(debug=True)
 
         self.assertEqual(settings.path, local_path.resolve())
@@ -1041,7 +1063,9 @@ ports = [5432, 5433]
         settings_path.write_text("theme: light\n", encoding="utf-8")
 
         manager = Coryl(self.root)
-        settings = manager.register_config("settings", "config/settings.yaml", readonly=True)
+        settings = manager.register_config(
+            "settings", "config/settings.yaml", readonly=True
+        )
 
         self.assertEqual(settings.load(), {"theme": "light"})
 
@@ -1266,7 +1290,9 @@ resources:
         with self.assertRaises(AttributeError):
             _ = manager.assets_directory_path
 
-    def test_manifest_config_property_remains_reserved_for_loaded_manifest_data(self) -> None:
+    def test_manifest_config_property_remains_reserved_for_loaded_manifest_data(
+        self,
+    ) -> None:
         manifest_path = self.root / "app.toml"
         manifest_path.write_text(
             """
@@ -1538,7 +1564,9 @@ resources:
 
         with mock.patch("coryl.resources.time.time", return_value=1_011.0):
             self.assertFalse(cache.has("tokens/state.txt"))
-            self.assertEqual(cache.get("tokens/state.txt", default="missing"), "missing")
+            self.assertEqual(
+                cache.get("tokens/state.txt", default="missing"), "missing"
+            )
 
         self.assertFalse(cache.file("tokens", "state.txt").exists())
 
@@ -1852,7 +1880,9 @@ resources:
             manager.register("invalid", {"path": "runtime/item", "kind": "socket"})
 
     def test_resource_validation_errors_are_explicit(self) -> None:
-        manager = Coryl(self.root, resources={"assets": ResourceSpec.directory("assets")})
+        manager = Coryl(
+            self.root, resources={"assets": ResourceSpec.directory("assets")}
+        )
 
         with self.assertRaises(ResourceNotRegisteredError):
             manager.path("missing")
@@ -1904,7 +1934,9 @@ resources:
         try:
             link_path.symlink_to(target_path, target_is_directory=True)
         except OSError as error:
-            raise unittest.SkipTest(f"Directory symlinks are unavailable: {error}") from error
+            raise unittest.SkipTest(
+                f"Directory symlinks are unavailable: {error}"
+            ) from error
 
     def _remove_directory_link(self, link_path: Path) -> None:
         if not link_path.exists() and not link_path.is_symlink():
@@ -1941,7 +1973,9 @@ resources:
                 self._lock_path.write_text("locked", encoding="utf-8")
                 return self._lock_path
 
-            def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+            def __exit__(
+                self, exc_type: object, exc: object, traceback: object
+            ) -> bool:
                 return False
 
         class FakeFileLock:
@@ -2066,7 +2100,9 @@ resources:
                 self.directory.mkdir(parents=True, exist_ok=True)
                 self._entries: dict[object, tuple[object, float | None]] = {}
 
-            def set(self, key: object, value: object, expire: float | None = None) -> bool:
+            def set(
+                self, key: object, value: object, expire: float | None = None
+            ) -> bool:
                 expires_at = None if expire is None else clock["now"] + float(expire)
                 self._entries[key] = (value, expires_at)
                 return True

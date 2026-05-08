@@ -7,7 +7,11 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 
-EXAMPLES_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd() / "examples"
+EXAMPLES_DIR = (
+    Path(__file__).resolve().parent
+    if "__file__" in globals()
+    else Path.cwd() / "examples"
+)
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
@@ -33,8 +37,12 @@ def main() -> int:
         app = Coryl(root=root)
         cache = app.caches.diskcache("api", ".cache/api")
         cache.set("users/42", {"id": 42, "name": "Ada"})
-        first = cache.remember_json("responses/user.json", lambda: {"id": 7, "call": 1}, ttl=60)
-        second = cache.remember_json("responses/user.json", lambda: {"id": 7, "call": 2}, ttl=60)
+        first = cache.remember_json(
+            "responses/user.json", lambda: {"id": 7, "call": 1}, ttl=60
+        )
+        second = cache.remember_json(
+            "responses/user.json", lambda: {"id": 7, "call": 2}, ttl=60
+        )
         payload = {
             "available": True,
             "cached_user": cache.get("users/42"),

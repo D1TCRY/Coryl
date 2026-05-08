@@ -73,7 +73,9 @@ def test_register_package_assets_reads_resources_across_import_styles(
     assert isinstance(assets, PackageAssetGroup)
     assert app.assets.get("bundled") is assets
     assert assets.readonly is True
-    assert assets.read_text("templates", "email.html") == "<html>Hello from Coryl</html>"
+    assert (
+        assets.read_text("templates", "email.html") == "<html>Hello from Coryl</html>"
+    )
     assert assets.read_bytes("images", "logo.bin") == b"\x00\x01coryl"
     assert assets.exists("nested", "docs", "readme.txt") is True
     assert assets.exists("missing.txt") is False
@@ -89,12 +91,18 @@ def test_from_package_supports_default_root_and_file_materialization(
     template = assets.file("assets", "templates", "email.html")
 
     assert isinstance(template, PackageAssetResource)
-    assert assets.read_text("assets", "templates", "email.html") == "<html>Hello from Coryl</html>"
+    assert (
+        assets.read_text("assets", "templates", "email.html")
+        == "<html>Hello from Coryl</html>"
+    )
     assert assets.read_bytes("assets", "images", "logo.bin") == b"\x00\x01coryl"
 
     with template.as_file() as materialized_path:
         assert materialized_path.is_file()
-        assert materialized_path.read_text(encoding="utf-8") == "<html>Hello from Coryl</html>"
+        assert (
+            materialized_path.read_text(encoding="utf-8")
+            == "<html>Hello from Coryl</html>"
+        )
 
 
 def test_package_asset_namespace_alias_and_files_listing(
@@ -113,7 +121,9 @@ def test_package_asset_namespace_alias_and_files_listing(
         "nested/docs/readme.txt",
         "templates/email.html",
     ]
-    assert [resource.relative_path.as_posix() for resource in assets.files("**/*.html")] == [
+    assert [
+        resource.relative_path.as_posix() for resource in assets.files("**/*.html")
+    ] == [
         "templates/email.html",
     ]
 
@@ -135,7 +145,9 @@ def test_package_asset_require_missing_and_traversal_errors_are_clear(
         assets.file("..", "escape.txt")
 
 
-def test_package_assets_are_readonly_by_default(tmp_path: Path, fixture_package_name: str) -> None:
+def test_package_assets_are_readonly_by_default(
+    tmp_path: Path, fixture_package_name: str
+) -> None:
     app = Coryl(root=tmp_path)
     assets = app.assets.from_package("bundled", fixture_package_name, "assets")
     template = assets.file("templates", "email.html")
@@ -167,7 +179,9 @@ def test_package_assets_copy_to_overwrite_and_target_safety(
     (target / "templates").mkdir(parents=True, exist_ok=True)
     (target / "templates" / "email.html").write_text("stale", encoding="utf-8")
 
-    with pytest.raises(FileExistsError, match=re.escape(str(target / "templates" / "email.html"))):
+    with pytest.raises(
+        FileExistsError, match=re.escape(str(target / "templates" / "email.html"))
+    ):
         assets.copy_to(target)
 
     copied_root = assets.copy_to(target, overwrite=True)
@@ -177,9 +191,9 @@ def test_package_assets_copy_to_overwrite_and_target_safety(
         "<html>Hello from Coryl</html>"
     )
     assert (copied_root / "images" / "logo.bin").read_bytes() == b"\x00\x01coryl"
-    assert (copied_root / "nested" / "docs" / "readme.txt").read_text(encoding="utf-8") == (
-        "Nested package asset"
-    )
+    assert (copied_root / "nested" / "docs" / "readme.txt").read_text(
+        encoding="utf-8"
+    ) == ("Nested package asset")
 
     unsafe_target = tmp_path / "exports" / ".." / "escape"
     with pytest.raises(CorylUnsafePathError, match="Path traversal"):

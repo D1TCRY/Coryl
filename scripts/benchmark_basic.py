@@ -125,7 +125,9 @@ def _bench_json_config(iterations: int) -> list[float]:
             loaded = settings.load()
             samples.append(time.perf_counter() - start)
             if loaded != payload:
-                raise AssertionError("JSON config benchmark payload did not round-trip.")
+                raise AssertionError(
+                    "JSON config benchmark payload did not round-trip."
+                )
         return samples
 
 
