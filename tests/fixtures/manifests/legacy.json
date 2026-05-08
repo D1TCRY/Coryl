@@ -1,0 +1,12 @@
+{
+  "paths": {
+    "files": {
+      "settings": "config/settings.toml",
+      "notes": "data/notes.txt"
+    },
+    "directories": {
+      "http_cache": ".cache/http",
+      "ui": "assets/ui"
+    }
+  }
+}

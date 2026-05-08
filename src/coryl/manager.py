@@ -29,6 +29,7 @@ from .resources import (
     Resource,
     ResourceKind,
     ResourceSpec,
+    _load_diskcache_cache_class,
     create_resource,
 )
 from .serialization import load_from_path
@@ -768,14 +769,17 @@ class ResourceManager:
         backend: str | None = None,
         replace: bool = False,
     ) -> CacheResource:
+        spec = ResourceSpec.cache(
+            relative_path,
+            create=self._default_create_value(create, readonly=readonly),
+            readonly=readonly,
+            backend=backend,
+        )
+        if backend == "diskcache":
+            _load_diskcache_cache_class()
         self.register(
             name,
-            ResourceSpec.cache(
-                relative_path,
-                create=self._default_create_value(create, readonly=readonly),
-                readonly=readonly,
-                backend=backend,
-            ),
+            spec,
             replace=replace,
         )
         return self.cache_resource(name)

@@ -1,0 +1,30 @@
+version = 2
+
+[resources.settings]
+path = "config/settings.toml"
+kind = "file"
+role = "config"
+create = false
+readonly = true
+required = true
+format = "toml"
+schema = "app.settings.v1"
+
+[resources.notes]
+path = "data/notes.txt"
+kind = "file"
+role = "data"
+create = true
+
+[resources.http_cache]
+path = ".cache/http"
+kind = "directory"
+role = "cache"
+create = false
+backend = "diskcache"
+
+[resources.ui]
+path = "assets/ui"
+kind = "directory"
+role = "assets"
+create = false

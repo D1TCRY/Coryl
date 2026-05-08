@@ -1,0 +1,27 @@
+version: 2
+resources:
+  settings:
+    path: config/settings.toml
+    kind: file
+    role: config
+    create: false
+    readonly: true
+    required: true
+    format: toml
+    schema: app.settings.v1
+  notes:
+    path: data/notes.txt
+    kind: file
+    role: data
+    create: true
+  http_cache:
+    path: .cache/http
+    kind: directory
+    role: cache
+    create: false
+    backend: diskcache
+  ui:
+    path: assets/ui
+    kind: directory
+    role: assets
+    create: false

@@ -1649,7 +1649,6 @@ class DiskCacheResource(CacheResource):
             raise CorylValidationError(
                 "The diskcache backend is only supported on the default local filesystem."
             )
-        _load_diskcache_cache_class()
         self._raw_cache: Any | None = None
 
     @property
