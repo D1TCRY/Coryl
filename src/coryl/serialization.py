@@ -6,18 +6,18 @@ import json
 import re
 from collections.abc import Mapping
 from datetime import date, datetime, time
+from functools import lru_cache
+from importlib import import_module
 from math import isfinite
 from pathlib import Path, PurePath
-from typing import Literal
+from typing import Any, Literal
 
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
     import tomli as tomllib
 
-import yaml
-
-from .exceptions import UnsupportedFormatError
+from .exceptions import CorylOptionalDependencyError, UnsupportedFormatError
 
 StructuredFormat = Literal["json", "toml", "yaml"]
 
@@ -79,8 +79,9 @@ def loads(
     if format_name == "toml":
         return tomllib.loads(text)
     if format_name == "yaml":
+        yaml, unique_loader = _load_yaml_support()
         if unique_keys:
-            result = yaml.load(text, Loader=_UniqueKeySafeLoader)
+            result = yaml.load(text, Loader=unique_loader)
         else:
             result = yaml.safe_load(text)
         return {} if result is None else result
@@ -94,6 +95,7 @@ def dumps(content: object, format_name: StructuredFormat) -> str:
     if format_name == "toml":
         return dumps_toml(content)
     if format_name == "yaml":
+        yaml, _ = _load_yaml_support()
         return yaml.safe_dump(
             content,
             allow_unicode=True,
@@ -240,25 +242,39 @@ def _mapping_from_unique_pairs(
     return mapping
 
 
-class _UniqueKeySafeLoader(yaml.SafeLoader):
-    pass
+@lru_cache(maxsize=1)
+def _load_yaml_module() -> Any:
+    try:
+        return import_module("yaml")
+    except ModuleNotFoundError as error:
+        raise CorylOptionalDependencyError(
+            "YAML support requires the optional 'PyYAML' dependency. "
+            "Install it with 'pip install coryl[yaml]'."
+        ) from error
 
 
-def _construct_unique_yaml_mapping(
-    loader: _UniqueKeySafeLoader,
-    node: yaml.nodes.MappingNode,
-    deep: bool = False,
-) -> dict[object, object]:
-    loader.flatten_mapping(node)
-    pairs: list[tuple[object, object]] = []
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        value = loader.construct_object(value_node, deep=deep)
-        pairs.append((key, value))
-    return _mapping_from_unique_pairs(pairs, source="YAML mapping")
+@lru_cache(maxsize=1)
+def _load_yaml_support() -> tuple[Any, type[Any]]:
+    yaml = _load_yaml_module()
 
+    class UniqueKeySafeLoader(yaml.SafeLoader):
+        pass
 
-_UniqueKeySafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-    _construct_unique_yaml_mapping,
-)
+    def construct_unique_yaml_mapping(
+        loader: Any,
+        node: Any,
+        deep: bool = False,
+    ) -> dict[object, object]:
+        loader.flatten_mapping(node)
+        pairs: list[tuple[object, object]] = []
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            value = loader.construct_object(value_node, deep=deep)
+            pairs.append((key, value))
+        return _mapping_from_unique_pairs(pairs, source="YAML mapping")
+
+    UniqueKeySafeLoader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+        construct_unique_yaml_mapping,
+    )
+    return yaml, UniqueKeySafeLoader

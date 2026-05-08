@@ -1,18 +1,10 @@
-# Layered config
+# Layered Config
 
-Coryl includes a lightweight layered configuration helper through `LayeredConfigResource`.
+`LayeredConfigResource` keeps layered config explicit and small.
 
-This is intentionally smaller than Dynaconf or Hydra. Coryl does not try to clone their full feature sets in this step. There is:
+It is meant for applications that want a few ordered config files, optional secrets, environment overrides, and runtime overrides without adding a larger config framework.
 
-- no plugin system
-- no implicit environment switching
-- no settings discovery
-- no dynamic resolvers
-- no schema engine beyond the optional Pydantic helpers already documented elsewhere
-
-The goal is a predictable merge pipeline that stays easy to reason about.
-
-## Basic usage
+## Basic Usage
 
 ```python
 from coryl import Coryl
@@ -28,86 +20,42 @@ settings = app.configs.layered(
     ],
     env_prefix="MYAPP",
     secrets="config/.secrets.toml",
-    required=False,
 )
 
 print(settings.as_dict())
 print(settings.get("database.host"))
-print(settings.require("database.port"))
 ```
 
-The older compatibility form still works when you only need one file plus a mounted secret directory:
+The compatibility form still works when you only need one config file plus a mounted secrets directory:
 
 ```python
 settings = app.configs.layered(
     "settings",
-    "config/settings.yaml",
+    "config/settings.toml",
     secrets_dir="/run/secrets",
 )
 ```
 
-## Merge order
+## Merge Order
 
-Layers are applied in a fixed, explicit order:
+Layers are applied in this order:
 
-1. defaults
-2. later files in `files=[...]`
-3. `secrets=...`
-4. environment variables with `env_prefix=...`
-5. runtime overrides from `override(...)` and `apply_overrides(...)`
+1. the files listed in `files=[...]`
+2. `secrets=...`
+3. environment variables from `env_prefix=...`
+4. runtime overrides from `override(...)` and `apply_overrides(...)`
 
-Later layers always win.
+Later layers win.
 
-## Merge rules
+## Merge Rules
 
-Dictionary values are deep-merged recursively.
+- dictionaries are deep-merged
+- lists are replaced
+- scalar values are replaced
 
-Lists are replaced, not concatenated.
+## Environment Variables
 
-Scalars are replaced.
-
-Example:
-
-```toml
-# defaults.toml
-features = ["a", "b"]
-
-[database]
-host = "localhost"
-
-[database.options]
-pool = 5
-ssl = true
-```
-
-```toml
-# local.toml
-features = ["c"]
-
-[database.options]
-ssl = false
-timeout = 30
-```
-
-Result:
-
-```python
-{
-    "features": ["c"],
-    "database": {
-        "host": "localhost",
-        "options": {
-            "pool": 5,
-            "ssl": False,
-            "timeout": 30,
-        },
-    },
-}
-```
-
-## Environment variables
-
-Use `env_prefix="MYAPP"` to read variables such as:
+Use `env_prefix="MYAPP"` to read values like:
 
 ```bash
 MYAPP_DATABASE__HOST=localhost
@@ -121,67 +69,37 @@ Parsing is conservative:
 
 - `true` and `false` become booleans
 - `null` and `none` become `None`
-- integers are parsed as integers
-- floats are parsed as floats
-- JSON arrays and objects such as `[1, 2]` or `{"region": "eu"}` are parsed
-- all other values stay as strings
+- integers and floats are parsed when unambiguous
+- JSON arrays and objects are parsed
+- everything else stays a string
 
-Coryl does not try to evaluate arbitrary Python expressions or invent custom casting rules.
-
-## Runtime overrides
-
-Runtime overrides are applied last and stay attached to the resource until you replace them with new overrides or discard the resource.
+## Runtime Overrides
 
 ```python
 settings.override({"database.host": "localhost", "debug": True})
-settings.apply_overrides(["database.port=5432", "features=[\"a\", \"b\"]"])
+settings.apply_overrides(["database.port=5432"])
 ```
 
-Supported helpers:
+Useful helpers:
 
-- `settings.get("database.host", default=None)`
-- `settings.require("database.host")`
 - `settings.as_dict()`
+- `settings.get("key.path", default=None)`
+- `settings.require("key.path")`
 - `settings.reload()`
-- `settings.override({...})`
-- `settings.apply_overrides([...])`
 
-## Watching for reloads
+## Writes
 
-Install the optional watch extra first:
+Layered configs still behave like config resources for writes.
 
-```bash
-pip install coryl[watch]
-```
+The writable path is:
 
-Then keep the reload loop explicit:
+- the single path passed in the compatibility form
+- the last file in `files=[...]` for the multi-file form
 
-```python
-def apply(config):
-    print("reloaded", config)
+`load()` and `as_dict()` return the merged view. `save(...)`, `save_typed(...)`, and `update(...)` write to the writable file layer.
 
+## Optional Helpers
 
-for config in settings.watch_reload():
-    apply(config)
-```
-
-`settings.on_change(apply)` is available as a minimal callback wrapper around the same blocking loop. Coryl does not start daemon reload threads automatically.
-
-## Required files
-
-Set `required=True` when every declared layer must exist.
-
-When `required=False`, missing files are skipped.
-
-When `required=True`, missing files raise `FileNotFoundError` with the missing path in the message.
-
-## Save behavior
-
-`LayeredConfigResource` still behaves like a config resource for writes.
-
-The resource `path` points at the top writable file layer, which is:
-
-- the single file you passed in the compatibility form
-- the last path in `files=[...]` for the multi-file form
-
-That means `save(...)`, `save_typed(...)`, and `update(...)` write to the top writable file layer, while `load()` and `as_dict()` read the fully merged view.
+- `pip install coryl[pydantic]` adds typed config helpers.
+- `pip install coryl[watch]` adds blocking watch and reload helpers.
+- `pip install coryl[yaml]` adds YAML layered config files.

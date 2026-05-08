@@ -2,21 +2,27 @@
 name = "coryl"
 version = "0.0.1"
 dependencies = [
-    "PyYAML>=6.0",
     "tomli>=2.0.1; python_version < '3.11'",
 ]
 authors = [
     { name = "Cecchelani Diego", email = "ceccdieg@gmail.com" },
 ]
-description = "Safe resource and file management for Python applications."
+description = "Lightweight Python application resource manager for configs, caches, assets, and files under safe roots."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 keywords = ["resources", "files", "configuration", "assets", "python"]
 urls = { Homepage = "https://www.coryl.net" }
@@ -24,13 +30,24 @@ license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
 [project.optional-dependencies]
-cli = []
-diskcache = ["diskcache>=5"]
-fsspec = ["fsspec>=2024"]
-lock = ["filelock>=3"]
 platform = ["platformdirs>=4"]
 pydantic = ["pydantic>=2", "pydantic-settings>=2"]
+diskcache = ["diskcache>=5"]
 watch = ["watchfiles>=0.21"]
+fsspec = ["fsspec>=2024"]
+lock = ["filelock>=3"]
+cli = []
+yaml = ["PyYAML>=6.0"]
+all = [
+    "platformdirs>=4",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "diskcache>=5",
+    "watchfiles>=0.21",
+    "fsspec>=2024",
+    "filelock>=3",
+    "PyYAML>=6.0",
+]
 
 [project.scripts]
 coryl = "coryl.cli:main"
