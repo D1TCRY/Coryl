@@ -1336,7 +1336,8 @@ class CacheResource(Resource):
         return text_value
 
     def load(self, *parts: str | Path, default: object = MISSING) -> object:
-        return self.file(*parts).content(default=default)
+        resource = self._cache_file(*parts)
+        return self._get_cached_value(resource, default=default)
 
     def delete(self, *parts: str | Path, missing_ok: bool = True) -> None:
         self._assert_writable("deleted")
