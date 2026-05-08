@@ -42,7 +42,7 @@ def main() -> int:
     assets = app.assets.add("ui", "assets/ui")
 
     settings.save({"theme": "light", "debug": True})
-    logo = assets.file("images", "logo.txt", create=True)
+    logo = assets.file("logo.txt", create=True)
     logo.write_text("logo")
 
     calls = {"count": 0}
@@ -60,8 +60,7 @@ def main() -> int:
             "configured_root": configured_root,
             "factory_calls": calls["count"],
             "first": first,
-            "logo_text": assets.require("images", "logo.txt").read_text(),
-            "root": app.root_path.as_posix(),
+            "logo_text": assets.require("logo.txt").read_text(),
             "second": second,
             "settings": settings.load(),
         }

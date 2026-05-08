@@ -29,6 +29,7 @@ def main() -> int:
             root / "config" / "defaults.toml",
             """
             debug = false
+            theme = "base"
 
             [database]
             host = "db"
@@ -38,21 +39,13 @@ def main() -> int:
         write_block(
             root / "config" / "local.toml",
             """
-            [database]
-            host = "local-db"
-            """,
-        )
-        write_block(
-            root / "config" / ".secrets.toml",
-            """
-            token = "secret"
+            theme = "local"
             """,
         )
 
         previous_host = os.environ.get("MYAPP_DATABASE__HOST")
-        previous_debug = os.environ.get("MYAPP_DEBUG")
         os.environ["MYAPP_DATABASE__HOST"] = "env-db"
-        os.environ["MYAPP_DEBUG"] = "true"
+        payload: dict[str, object]
         try:
             app = Coryl(root=root)
             settings = app.configs.layered(
@@ -62,27 +55,21 @@ def main() -> int:
                     "config/local.toml",
                 ],
                 env_prefix="MYAPP",
-                secrets="config/.secrets.toml",
             )
 
-            merged = settings.apply_overrides(["database.host=localhost"])
+            merged = settings.override({"debug": True})
+            payload = {
+                "database_host": settings.get("database.host"),
+                "debug": merged["debug"],
+                "merged": merged,
+            }
         finally:
             if previous_host is None:
                 os.environ.pop("MYAPP_DATABASE__HOST", None)
             else:
                 os.environ["MYAPP_DATABASE__HOST"] = previous_host
-            if previous_debug is None:
-                os.environ.pop("MYAPP_DEBUG", None)
-            else:
-                os.environ["MYAPP_DEBUG"] = previous_debug
 
-        return emit_json(
-            {
-                "database_host": settings.get("database.host"),
-                "debug": merged["debug"],
-                "merged": merged,
-            }
-        )
+        return emit_json(payload)
 
 
 if __name__ == "__main__":

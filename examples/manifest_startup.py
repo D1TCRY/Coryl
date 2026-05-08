@@ -1,4 +1,4 @@
-"""Declarative manifest startup example."""
+"""Manifest startup example."""
 
 from __future__ import annotations
 
@@ -52,29 +52,28 @@ def main() -> int:
             root / "config" / "settings.toml",
             """
             theme = "dark"
+
             [database]
             host = "localhost"
+            port = 5432
             """,
         )
         write_text(root / ".cache" / "http" / "users" / "42.json", '{"id": 42}')
         write_text(root / "assets" / "ui" / "logo.svg", "<svg></svg>")
 
         app = Coryl(root=root, manifest_path="app.toml", create_missing=False)
+        audit = app.audit_paths()
         settings = app.configs.get("settings")
         cache = app.caches.get("http_cache")
         assets = app.assets.get("ui")
-        audit = app.audit_paths()
 
         return emit_json(
             {
-                "audit_safe": {
-                    name: details["safe"]
-                    for name, details in sorted(audit["resources"].items())
-                },
+                "audit_paths": audit,
                 "cached_user": cache.load("users", "42.json"),
-                "resource_names": sorted(app.resources),
-                "theme": settings.load()["theme"],
-                "ui_exists": assets.exists(),
+                "logo_name": assets.require("logo.svg").path.name,
+                "resource_names": sorted(audit["resources"]),
+                "theme": settings.get("theme"),
             }
         )
 

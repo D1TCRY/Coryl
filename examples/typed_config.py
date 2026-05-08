@@ -29,6 +29,7 @@ def main() -> int:
             {
                 "available": False,
                 "reason": "pydantic is not installed.",
+                "skipped": True,
             }
         )
 
@@ -37,6 +38,7 @@ def main() -> int:
             {
                 "available": False,
                 "reason": "typed config helpers require Pydantic v2.",
+                "skipped": True,
             }
         )
 

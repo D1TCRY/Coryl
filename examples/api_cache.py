@@ -1,4 +1,4 @@
-"""File-oriented API cache example."""
+"""API cache example."""
 
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from _support import emit_json, ensure_src_path
 
 ensure_src_path()
 
-import coryl.resources as coryl_resources
-
 from coryl import Coryl
 
 
@@ -29,32 +27,20 @@ def main() -> int:
         app = Coryl(root=root)
         cache = app.caches.add("api", ".cache/api")
 
-        clock = {"now": 1_000.0}
         calls = {"count": 0}
-        original_time = coryl_resources.time.time
-        coryl_resources.time.time = lambda: clock["now"]
-        try:
 
-            def fetch_user() -> dict[str, object]:
-                calls["count"] += 1
-                return {"id": 42, "etag": f"v{calls['count']}"}
+        def fake_api() -> dict[str, object]:
+            calls["count"] += 1
+            return {"call": calls["count"], "id": 42, "name": "Ada"}
 
-            first = cache.remember_json("users/42.json", fetch_user, ttl=10)
-            second = cache.remember_json("users/42.json", fetch_user, ttl=10)
-
-            clock["now"] = 1_011.0
-            expired_value = cache.load("users", "42.json", default="expired")
-            third = cache.remember_json("users/42.json", fetch_user, ttl=10)
-        finally:
-            coryl_resources.time.time = original_time
+        first = cache.remember_json("users/42.json", fake_api, ttl=60)
+        second = cache.remember_json("users/42.json", fake_api, ttl=60)
 
         return emit_json(
             {
-                "expired_value": expired_value,
                 "factory_calls": calls["count"],
                 "first": first,
                 "second": second,
-                "third": third,
             }
         )
 

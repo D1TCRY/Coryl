@@ -1,23 +1,35 @@
 # Coryl Examples
 
-These examples are small and focused.
+Every example creates its own temporary project root, uses only local files, and prints a small JSON payload so it is easy to inspect manually and easy to validate with `pytest`.
 
-- `simple_local_app.py`: local project-root config, cache, and asset usage
-- `cli_tool_config.py`: CLI-style config and cache usage
-- `api_cache.py`: file-oriented API response caching
-- `desktop_app_assets.py`: desktop-style filesystem and package assets together
-- `declarative_manifest.py`: startup from `app.toml` plus `audit_paths()`
-- `installed_app.py`: `Coryl.for_app(...)` with mocked `platformdirs`
-- `container_config.py`: readonly config and assets with `secrets_dir`
-- `diagnostics_cli.py`: manifest-driven diagnostics CLI workflow
-- `package_assets.py`: read-only bundled package assets
-- `typed_config.py`: typed config validation with Pydantic
-- `layered_config.py`: layered config with file layers and overrides
-- `diskcache_optional.py`: optional `diskcache` cache backend example
-- `fsspec_memory.py`: optional `fsspec` memory filesystem example
+Run one example:
 
-Optional extras used by some examples:
+```bash
+python examples/simple_local_app.py
+```
 
-- `pip install coryl[pydantic]`
-- `pip install coryl[diskcache]`
-- `pip install coryl[fsspec]`
+Run the whole example suite:
+
+```bash
+pytest -q tests/test_examples.py
+```
+
+Included scripts:
+
+- `simple_local_app.py`: `Coryl(root=...)` with TOML config, JSON config, cache, and asset lookup
+- `cli_tool_config.py`: create a default config, update it, and print a value
+- `api_cache.py`: fake API caching with `remember_json(..., ttl=...)`
+- `desktop_app_assets.py`: filesystem assets with `require()`, `files()`, and `glob()`
+- `manifest_startup.py`: write `app.toml`, load it, use configs/caches/assets, and inspect `audit_paths()`
+- `package_assets.py`: package assets through `importlib.resources`, including `read_text()`, `read_bytes()`, and `copy_to()`
+- `typed_config.py`: typed config loading with Pydantic when available
+- `layered_config.py`: defaults, local overrides, environment overrides, and runtime overrides
+- `cache_diskcache.py`: optional `diskcache` cache backend
+- `fsspec_memory.py`: optional `fsspec` memory filesystem backend
+- `diagnostics_cli.py`: run `coryl resources list`, `coryl resources check`, and `coryl config show`
+
+Optional extras:
+
+- `pip install coryl[pydantic]` for `typed_config.py`
+- `pip install coryl[diskcache]` for `cache_diskcache.py`
+- `pip install coryl[fsspec]` for `fsspec_memory.py`

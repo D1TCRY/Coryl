@@ -24,31 +24,29 @@ from coryl import Coryl
 def main() -> int:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
-        write_text(root / "assets" / "ui" / "images" / "logo.svg", "<svg></svg>")
+        write_text(root / "assets" / "ui" / "logo.svg", "<svg>demo</svg>")
 
         app = Coryl(root=root)
         settings = app.configs.add("settings", "config/settings.toml")
-        cache = app.caches.add("http", ".cache/http")
+        profile = app.configs.add("profile", "config/profile.json")
+        cache = app.caches.add("people", ".cache/people")
         assets = app.assets.add("ui", "assets/ui")
-        profiles = app.data.add("profiles", "data/profiles.json")
 
         settings.save({"app_name": "Coryl Demo", "debug": True})
-        profiles.write_json([{"id": 42, "name": "Ada"}])
+        profile.save({"locale": "en-US", "timezone": "UTC"})
         user = cache.remember_json(
-            "users/42.json",
-            lambda: {"id": 42, "name": "Ada"},
-            ttl=300,
+            "users/ada.json",
+            lambda: {"id": 1, "name": "Ada"},
         )
-        logo = assets.require("images", "logo.svg")
+        logo = assets.require("logo.svg")
 
         return emit_json(
             {
                 "app_name": settings.load()["app_name"],
                 "cached_user": user,
                 "debug": settings.load()["debug"],
+                "locale": profile.load()["locale"],
                 "logo_name": logo.path.name,
-                "profiles_count": len(profiles.read_json()),
-                "settings_path": settings.path.as_posix(),
             }
         )
 

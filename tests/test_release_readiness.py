@@ -301,9 +301,14 @@ class ReleaseReadinessTests(unittest.TestCase):
                 "simple_local_app.py",
                 "cli_tool_config.py",
                 "api_cache.py",
+                "desktop_app_assets.py",
+                "manifest_startup.py",
                 "package_assets.py",
                 "typed_config.py",
                 "layered_config.py",
+                "cache_diskcache.py",
+                "fsspec_memory.py",
+                "diagnostics_cli.py",
             }.issubset(example_names)
         )
 
@@ -312,8 +317,11 @@ class ReleaseReadinessTests(unittest.TestCase):
             "simple_local_app.py",
             "cli_tool_config.py",
             "api_cache.py",
+            "desktop_app_assets.py",
+            "manifest_startup.py",
             "package_assets.py",
             "layered_config.py",
+            "diagnostics_cli.py",
         ):
             self._run_example(example_name)
 
