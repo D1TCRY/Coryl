@@ -35,15 +35,15 @@ def main() -> int:
         cache.set("users/42", {"id": 42, "name": "Ada"})
         first = cache.remember_json("responses/user.json", lambda: {"id": 7, "call": 1}, ttl=60)
         second = cache.remember_json("responses/user.json", lambda: {"id": 7, "call": 2}, ttl=60)
-
-        return emit_json(
-            {
-                "available": True,
-                "cached_user": cache.get("users/42"),
-                "first": first,
-                "second": second,
-            }
-        )
+        payload = {
+            "available": True,
+            "cached_user": cache.get("users/42"),
+            "first": first,
+            "second": second,
+        }
+        # diskcache keeps the SQLite file open on Windows until the cache is closed.
+        cache.raw.close()
+        return emit_json(payload)
 
 
 if __name__ == "__main__":

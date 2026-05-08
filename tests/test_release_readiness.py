@@ -9,6 +9,7 @@ import textwrap
 import tomllib
 import unittest
 from pathlib import Path
+from typing import get_args
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -91,6 +92,52 @@ class ReleaseReadinessTests(unittest.TestCase):
         for name in expected_exports:
             self.assertTrue(hasattr(coryl, name), name)
             self.assertIn(name, dir(coryl))
+
+    def test_public_namespaces_and_resource_role_are_runtime_visible(self) -> None:
+        import coryl
+
+        namespace_exports = (
+            "AssetNamespace",
+            "CacheNamespace",
+            "ConfigNamespace",
+            "DataNamespace",
+            "LogNamespace",
+        )
+        for name in namespace_exports:
+            self.assertTrue(hasattr(coryl, name), name)
+
+        self.assertEqual(
+            get_args(coryl.ResourceRole),
+            ("resource", "config", "cache", "assets", "data", "logs"),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = coryl.Coryl(root=temp_dir)
+
+            self.assertIsInstance(app.assets, coryl.AssetNamespace)
+            self.assertIsInstance(app.caches, coryl.CacheNamespace)
+            self.assertIsInstance(app.configs, coryl.ConfigNamespace)
+            self.assertIsInstance(app.data, coryl.DataNamespace)
+            self.assertIsInstance(app.logs, coryl.LogNamespace)
+
+            data = app.data.add("state", "data/state.json")
+            log = app.logs.add("main", "logs/app.log")
+
+            self.assertEqual(data.role, "data")
+            self.assertEqual(log.role, "logs")
+
+    def test_public_conflict_and_missing_resource_errors_are_raised(self) -> None:
+        import coryl
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = coryl.Coryl(root=temp_dir)
+            app.configs.add("settings", "config/settings.toml")
+
+            with self.assertRaises(coryl.ResourceConflictError):
+                app.configs.add("settings", "config/settings.toml")
+
+            with self.assertRaises(coryl.CorylResourceNotFoundError):
+                app.resource("missing")
 
     def test_importing_coryl_stays_lightweight(self) -> None:
         result = self._run_python(
