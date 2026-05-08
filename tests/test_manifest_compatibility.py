@@ -214,9 +214,17 @@ def test_audit_paths_includes_manifest_and_imperative_resources(tmp_path: Path) 
 def test_manifest_loaded_diskcache_backend_stays_lazy_until_used(tmp_path: Path) -> None:
     manifest_path = _copy_manifest_fixture(tmp_path, "v2.toml", target_name="app.toml")
     app = Coryl(root=tmp_path, manifest_path=manifest_path.name)
+    cache = app.caches.get("http_cache")
 
-    assert isinstance(app.caches.get("http_cache"), DiskCacheResource)
+    assert isinstance(cache, DiskCacheResource)
     assert app.audit_paths()["resources"]["http_cache"]["safe"] is True
 
-    with pytest.raises(CorylOptionalDependencyError, match="coryl\\[diskcache\\]"):
-        app.caches.get("http_cache").clear()
+    if importlib.util.find_spec("diskcache") is None:
+        with pytest.raises(CorylOptionalDependencyError, match="coryl\\[diskcache\\]"):
+            cache.clear()
+        return
+
+    cache.set("users:42", {"id": 42})
+    assert cache.get("users:42") == {"id": 42}
+    cache.clear()
+    assert cache.get("users:42") is None

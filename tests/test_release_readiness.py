@@ -51,6 +51,8 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertIn("Programming Language :: Python :: 3.12", project["classifiers"])
         self.assertIn("Programming Language :: Python :: 3.13", project["classifiers"])
         self.assertIn("Typing :: Typed", project["classifiers"])
+        self.assertEqual(project["license"], "MIT")
+        self.assertEqual(project["license-files"], ["LICEN[CS]E*"])
         self.assertEqual(
             set(optional),
             {"platform", "pydantic", "diskcache", "watch", "fsspec", "lock", "cli", "yaml", "all"},
