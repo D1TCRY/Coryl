@@ -136,7 +136,6 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertIn("include README.md", manifest)
         self.assertIn("include LICENSE", manifest)
         self.assertIn("include CHANGELOG.md", manifest)
-        self.assertIn("include CONTRIBUTING.md", manifest)
         self.assertIn("include AGENTS.md", manifest)
         self.assertIn("graft docs", manifest)
         self.assertIn("graft examples", manifest)

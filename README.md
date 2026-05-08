@@ -2,6 +2,41 @@
 
 A lightweight Python application resource manager for configs, caches, assets, and files under safe roots.
 
+If your project has started to grow little path rules such as `config/`, `.cache/`,
+`assets/`, or `data/`, Coryl gives you one small, explicit layer to manage them
+without turning your application into a framework.
+
+It is built for the common local-app case: keep files under a root you control,
+register the resources you care about, and read or write them through clear helpers.
+The core install stays intentionally small, while optional extras add things like
+YAML support, typed config validation, `diskcache`, file watching, `fsspec`,
+platform-specific app directories, and file locks.
+
+## Start Here
+
+For most new users, the fastest path is:
+
+1. Install the core package with `python -m pip install coryl`.
+2. Create one manager with `Coryl(root=".")` in a project folder you control.
+3. Register the resources your app needs, such as config files, caches, and assets.
+4. Add extras only when you actually need them, such as `coryl[yaml]` or `coryl[all]`.
+
+The smallest useful setup looks like this:
+
+```python
+from coryl import Coryl
+
+app = Coryl(root=".")
+settings = app.configs.add("settings", "config/settings.toml")
+
+settings.save({"app_name": "Coryl Demo", "debug": True})
+print(settings.load()["app_name"])
+```
+
+That gives you a managed config file under a safe root, structured TOML reads and
+writes, and a clean place to grow into `app.caches`, `app.assets`, `app.data`, and
+`app.logs` when the project needs them.
+
 ## Why Coryl?
 
 Many Python applications eventually need the same small set of file concerns:
@@ -21,6 +56,13 @@ Coryl is a small beta library. The default local-filesystem flow, `Coryl(root=".
 is the most exercised path today. Optional integrations are covered by targeted tests,
 but they remain intentionally conservative and some helpers are local-filesystem-only.
 
+In short:
+
+- start with the local filesystem manager unless you know you need more
+- expect explicit, predictable file handling rather than framework magic
+- treat `fsspec`, watching, locks, and `diskcache` as opt-in features with narrower behavior boundaries
+- use Coryl when you want a safe resource layer, not a larger application architecture
+
 ## Installation
 
 Core install:
@@ -28,6 +70,11 @@ Core install:
 ```bash
 python -m pip install coryl
 ```
+
+Requirements:
+
+- Python `3.10+`
+- a local project directory you control if you want the default `Coryl(root=".")` workflow
 
 The core install includes:
 
@@ -55,6 +102,13 @@ Missing optional dependencies fail lazily. Coryl imports them only when you use 
 related feature, then raises `CorylOptionalDependencyError` with the matching
 `pip install coryl[...]` hint.
 
+Quick guidance:
+
+- Use the core install if you want local configs, caches, assets, JSON/TOML I/O, and the CLI.
+- Add `coryl[yaml]` if your project uses YAML files or YAML manifests.
+- Add `coryl[platform]` if you want OS-specific config/cache/data/log directories through `Coryl.for_app(...)`.
+- Add `coryl[all]` if you are evaluating the full optional feature set locally.
+
 More detail:
 
 - [Optional extras](https://github.com/D1TCRY/Coryl/blob/main/docs/optional-extras.md)
@@ -63,7 +117,8 @@ More detail:
 ## Quick Start
 
 Run this from a disposable working directory or a project folder you control. Coryl
-creates files relative to the root you pass in.
+creates files relative to the root you pass in. This example shows the common pattern:
+one config, one cache, and one asset group under the same manager.
 
 ```python
 from coryl import Coryl

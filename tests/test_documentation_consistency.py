@@ -9,7 +9,6 @@ README_PATH = PROJECT_ROOT / "README.md"
 EXAMPLES_README_PATH = PROJECT_ROOT / "examples" / "README.md"
 OPTIONAL_EXTRAS_PATH = PROJECT_ROOT / "docs" / "optional-extras.md"
 MATRIX_PATH = PROJECT_ROOT / "docs" / "DOCUMENTATION_MATRIX.md"
-CONTRIBUTING_PATH = PROJECT_ROOT / "CONTRIBUTING.md"
 AGENTS_PATH = PROJECT_ROOT / "AGENTS.md"
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 EXAMPLE_SCRIPTS = sorted(
@@ -40,21 +39,18 @@ def test_readme_and_optional_extras_doc_cover_declared_optional_extras() -> None
         assert install_hint in optional_extras_doc
 
 
-def test_contributing_and_agents_guides_cover_release_workflows() -> None:
-    contributing = CONTRIBUTING_PATH.read_text(encoding="utf-8")
+def test_agents_guide_and_examples_readme_cover_release_workflows() -> None:
     agents = AGENTS_PATH.read_text(encoding="utf-8").lower()
     examples_readme = EXAMPLES_README_PATH.read_text(encoding="utf-8")
-
-    assert "python -m pip install -e ." in contributing
-    assert "python -m pytest -q" in contributing
-    assert "python -m tox -q" in contributing
-    assert "python -m build --sdist --wheel" in contributing
-    assert "python -m twine check dist/*" in contributing
 
     assert "keep coryl simple by default" in agents
     assert "do not add mandatory dependencies for optional features" in agents
     assert "prefer tests before feature changes" in agents
     assert "run relevant tests before final response" in agents
+    assert "python -m pytest -q" in agents
+    assert "python -m tox -q" in agents
+    assert "python -m build --sdist --wheel" in agents
+    assert "python -m twine check dist/*" in agents
 
     assert "## Example Table" in examples_readme
     assert "| Example | Dependencies needed | Command to run | Expected output summary |" in examples_readme

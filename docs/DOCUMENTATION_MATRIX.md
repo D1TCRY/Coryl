@@ -31,19 +31,12 @@ Status meanings:
 | Local-only resource locking | `Installation`, `Safety Model` | `docs/optional-extras.md`, `docs/limitations.md`, `docs/api-reference.md` | `n/a` | `tests/test_coryl.py`, `tests/test_packaging_optional_dependencies.py`, `tests/test_fsspec_filesystem.py` | Aligned |
 | Example catalog and fresh-checkout behavior | `Examples` | `examples/README.md` | `examples/*.py` | `tests/test_examples.py`, `tests/test_release_readiness.py` | Aligned |
 
-Internal docs scanned but intentionally excluded from the feature rows:
-
-- `docs/QA_CHECKLIST.md`
-- `docs/RELEASE_QA_REPORT.md`
-- `docs/ROADMAP_IMPLEMENTATION.md`
-
-These files describe QA and release workflow rather than user-facing runtime behavior.
-
 ## README Code Block Coverage
 
 | Feature | README section | docs page | example file | test file | status |
 | --- | --- | --- | --- | --- | --- |
 | Install core package | `Installation` | `docs/optional-extras.md` | `n/a` | `tests/test_packaging_optional_dependencies.py` | Aligned |
+| Minimal first-run snippet | `Start Here` | `docs/api-reference.md` | `examples/cli_tool_config.py` | `tests/test_release_readiness.py::test_readme_python_examples_run` | Aligned |
 | Quick start local manager snippet | `Quick Start` | `docs/api-reference.md` | `examples/simple_local_app.py` | `tests/test_release_readiness.py::test_readme_python_examples_run` | Aligned |
 | Generic file and structured-data snippet | `Files and Structured Data` | `docs/api-reference.md` | `n/a` | `tests/test_structured_formats_filesystem.py`, `tests/test_release_readiness.py::test_readme_python_examples_run` | Aligned |
 | Basic config snippet | `Configs` / `Basic config` | `docs/api-reference.md` | `examples/cli_tool_config.py` | `tests/test_config_basic.py`, `tests/test_release_readiness.py::test_readme_python_examples_run` | Aligned |
