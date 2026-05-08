@@ -153,9 +153,16 @@ Deeper docs:
 - Simple local app: [examples/simple_local_app.py](examples/simple_local_app.py)
 - CLI tool config: [examples/cli_tool_config.py](examples/cli_tool_config.py)
 - API cache: [examples/api_cache.py](examples/api_cache.py)
+- Desktop app assets: [examples/desktop_app_assets.py](examples/desktop_app_assets.py)
+- Declarative manifest startup: [examples/declarative_manifest.py](examples/declarative_manifest.py)
+- Installed app roots: [examples/installed_app.py](examples/installed_app.py)
+- Docker or Kubernetes style config: [examples/container_config.py](examples/container_config.py)
+- Diagnostics CLI: [examples/diagnostics_cli.py](examples/diagnostics_cli.py)
 - Package assets: [examples/package_assets.py](examples/package_assets.py)
 - Typed config: [examples/typed_config.py](examples/typed_config.py)
 - Layered config: [examples/layered_config.py](examples/layered_config.py)
+- DiskCache optional backend: [examples/diskcache_optional.py](examples/diskcache_optional.py)
+- fsspec memory backend: [examples/fsspec_memory.py](examples/fsspec_memory.py)
 
 ## Compatibility Notes
 

@@ -2,41 +2,84 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
+
+EXAMPLES_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd() / "examples"
+if str(EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(EXAMPLES_DIR))
+
+from _support import emit_json, ensure_src_path, write_block
+
+ensure_src_path()
 
 from coryl import Coryl
 
 
-with TemporaryDirectory() as temp_dir:
-    root = Path(temp_dir)
-    config_root = root / "config"
-    config_root.mkdir(parents=True, exist_ok=True)
-    (config_root / "defaults.toml").write_text(
-        'debug = false\n[database]\nhost = "db"\n',
-        encoding="utf-8",
-    )
-    (config_root / "local.toml").write_text(
-        "[database]\nport = 5432\n",
-        encoding="utf-8",
-    )
-    (config_root / ".secrets.toml").write_text(
-        'token = "secret"\n',
-        encoding="utf-8",
-    )
+def main() -> int:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        write_block(
+            root / "config" / "defaults.toml",
+            """
+            debug = false
 
-    app = Coryl(root=root)
-    settings = app.configs.layered(
-        "settings",
-        files=[
-            "config/defaults.toml",
-            "config/local.toml",
-        ],
-        env_prefix="MYAPP",
-        secrets="config/.secrets.toml",
-    )
+            [database]
+            host = "db"
+            port = 5432
+            """,
+        )
+        write_block(
+            root / "config" / "local.toml",
+            """
+            [database]
+            host = "local-db"
+            """,
+        )
+        write_block(
+            root / "config" / ".secrets.toml",
+            """
+            token = "secret"
+            """,
+        )
 
-    settings.apply_overrides(["database.host=localhost", "debug=true"])
+        previous_host = os.environ.get("MYAPP_DATABASE__HOST")
+        previous_debug = os.environ.get("MYAPP_DEBUG")
+        os.environ["MYAPP_DATABASE__HOST"] = "env-db"
+        os.environ["MYAPP_DEBUG"] = "true"
+        try:
+            app = Coryl(root=root)
+            settings = app.configs.layered(
+                "settings",
+                files=[
+                    "config/defaults.toml",
+                    "config/local.toml",
+                ],
+                env_prefix="MYAPP",
+                secrets="config/.secrets.toml",
+            )
 
-    print(settings.as_dict()["debug"])
-    print(settings.get("database.host"))
+            merged = settings.apply_overrides(["database.host=localhost"])
+        finally:
+            if previous_host is None:
+                os.environ.pop("MYAPP_DATABASE__HOST", None)
+            else:
+                os.environ["MYAPP_DATABASE__HOST"] = previous_host
+            if previous_debug is None:
+                os.environ.pop("MYAPP_DEBUG", None)
+            else:
+                os.environ["MYAPP_DEBUG"] = previous_debug
+
+        return emit_json(
+            {
+                "database_host": settings.get("database.host"),
+                "debug": merged["debug"],
+                "merged": merged,
+            }
+        )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
