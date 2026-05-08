@@ -14,7 +14,7 @@ Release scope checked:
 
 ## Summary
 
-This pass focused strictly on release hygiene for `0.0.2`:
+This pass focused strictly on release hygiene for `0.0.1`:
 
 - Added coverage support with `pytest-cov` and repo coverage config.
 - Added a practical `mypy` baseline for the `coryl` package.
@@ -22,7 +22,7 @@ This pass focused strictly on release hygiene for `0.0.2`:
 - Made the sdist artifact policy explicit with `MANIFEST.in`.
 - Fixed the `tox` `fsspec` environment so YAML-backed fsspec tests no longer skip there.
 - Removed tracked bytecode/old distribution artifacts and added `.gitignore` rules for generated QA/build output.
-- Bumped the package version to `0.0.2` and updated `CHANGELOG.md`.
+- Aligned the package version to `0.0.1` and updated `CHANGELOG.md`.
 
 No Coryl runtime features or public APIs were added in this pass.
 
@@ -37,7 +37,7 @@ No Coryl runtime features or public APIs were added in this pass.
 | `python -m mypy -p coryl` | Passed with `Success: no issues found in 10 source files` |
 | `python -m ruff check .` | `All checks passed!` |
 | `python -m ruff format --check .` | `64 files already formatted` |
-| `python -m build --sdist --wheel` | Built `dist/coryl-0.0.2.tar.gz` and `dist/coryl-0.0.2-py3-none-any.whl` successfully |
+| `python -m build --sdist --wheel` | Built `dist/coryl-0.0.1.tar.gz` and `dist/coryl-0.0.1-py3-none-any.whl` successfully |
 
 ## Coverage
 
@@ -126,8 +126,8 @@ Wheel inspection confirmed:
 
 Artifacts built:
 
-- `dist/coryl-0.0.2.tar.gz`
-- `dist/coryl-0.0.2-py3-none-any.whl`
+- `dist/coryl-0.0.1.tar.gz`
+- `dist/coryl-0.0.1-py3-none-any.whl`
 
 ## Extras Matrix
 

@@ -2,14 +2,14 @@
 
 Date: 2026-05-08
 
-Target package version: `0.0.2`
+Target package version: `0.0.1`
 
 ## Docs Files Updated
 
 - `README.md`
   Clarified beta maturity, made first-run expectations explicit, switched install commands to `python -m pip`, and converted release-facing links to absolute GitHub URLs so the package long description keeps useful navigation on PyPI.
 - `CHANGELOG.md`
-  Expanded the `0.0.2` and `0.0.1` entries with summary, breaking changes, migration notes, optional extras, and known limitations.
+  Consolidated and expanded the `0.0.1` entry with summary, breaking changes, migration notes, optional extras, and known limitations.
 - `CONTRIBUTING.md`
   Added reproducible setup, test, packaging, style, docs, and extension guidance.
 - `AGENTS.md`
@@ -19,7 +19,7 @@ Target package version: `0.0.2`
 - `docs/optional-extras.md`
   Normalized install commands to `python -m pip`.
 - `pyproject.toml`
-  Aligned the package version with the current release docs at `0.0.2`.
+  Aligned the package version with the current release docs at `0.0.1`.
 - `MANIFEST.in`
   Added `CONTRIBUTING.md` and `AGENTS.md` to the sdist.
 - `tests/test_documentation_consistency.py`
@@ -59,8 +59,8 @@ Build and render checks:
 
 - `python -m build --sdist --wheel`
   Passed and produced:
-  - `dist/coryl-0.0.2.tar.gz`
-  - `dist/coryl-0.0.2-py3-none-any.whl`
+  - `dist/coryl-0.0.1.tar.gz`
+  - `dist/coryl-0.0.1-py3-none-any.whl`
 - `python -m twine check dist/*`
   Passed for both artifacts, so the configured `README.md` renders as a valid long description.
 
@@ -76,7 +76,7 @@ Artifact inspection summary:
 
 Metadata alignment:
 
-- `pyproject.toml` and `CHANGELOG.md` now agree on `0.0.2`.
+- `pyproject.toml` and `CHANGELOG.md` now agree on `0.0.1`.
 
 ## Remaining Documentation Risks
 
