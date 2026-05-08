@@ -2,6 +2,25 @@
 
 All notable changes to Coryl are documented in this file.
 
+## 0.0.2 - 2026-05-08
+
+### Summary
+
+- Packaging metadata patch release for Coryl 0.0.2.
+- Published the GitHub repository as the package `Home-Page`.
+
+### Changed
+
+- Updated `pyproject.toml` project metadata so `Home-Page` points to `https://github.com/D1TCRY/Coryl`.
+
+### Breaking changes
+
+- None.
+
+### Migration notes
+
+- If you built local artifacts for `0.0.1`, rebuild or reinstall so package metadata reports `0.0.2` and the GitHub repository `Home-Page`.
+
 ## 0.0.1 - 2026-05-08
 
 ### Summary

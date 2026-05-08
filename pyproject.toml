@@ -1,6 +1,6 @@
 [project]
 name = "coryl"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
     "tomli>=2.0.1; python_version < '3.11'",
 ]
@@ -24,7 +24,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 keywords = ["resources", "files", "configuration", "assets", "python"]
-urls = { Homepage = "https://www.ccometa.net/coryl" }
+urls = { "Home-Page" = "https://github.com/D1TCRY/Coryl" }
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 

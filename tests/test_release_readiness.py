@@ -48,8 +48,12 @@ class ReleaseReadinessTests(unittest.TestCase):
         optional = project["optional-dependencies"]
         setuptools_config = pyproject["tool"]["setuptools"]
 
-        self.assertEqual(project["version"], "0.0.1")
+        self.assertEqual(project["version"], "0.0.2")
         self.assertEqual(project["requires-python"], ">=3.10")
+        self.assertEqual(
+            project["urls"],
+            {"Home-Page": "https://github.com/D1TCRY/Coryl"},
+        )
         self.assertIn("Programming Language :: Python :: 3.10", project["classifiers"])
         self.assertIn("Programming Language :: Python :: 3.11", project["classifiers"])
         self.assertIn("Programming Language :: Python :: 3.12", project["classifiers"])
@@ -82,8 +86,10 @@ class ReleaseReadinessTests(unittest.TestCase):
     def test_changelog_entry_exists_for_current_release(self) -> None:
         changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("## 0.0.1 - 2026-05-08", changelog)
-        self.assertEqual(changelog.count("## 0.0.1 - 2026-05-08"), 1)
+        self.assertIn("## 0.0.2 - 2026-05-08", changelog)
+        self.assertEqual(changelog.count("## 0.0.2 - 2026-05-08"), 1)
+        self.assertIn("Packaging metadata patch release", changelog)
+        self.assertIn("GitHub repository as the package `Home-Page`", changelog)
         self.assertIn("packaging, documentation clarity, and reproducible QA", changelog)
         self.assertIn("First tagged public API baseline", changelog)
         self.assertIn("### Breaking changes", changelog)
