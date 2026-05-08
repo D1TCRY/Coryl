@@ -7,7 +7,7 @@ This page reflects the extras declared in `pyproject.toml`.
 Install:
 
 ```bash
-pip install coryl
+python -m pip install coryl
 ```
 
 What you get:
@@ -39,7 +39,7 @@ related feature, then raises `CorylOptionalDependencyError` with the matching
 Install:
 
 ```bash
-pip install coryl[lock]
+python -m pip install coryl[lock]
 ```
 
 What it enables:
@@ -58,7 +58,7 @@ Notes:
 Install:
 
 ```bash
-pip install coryl[diskcache]
+python -m pip install coryl[diskcache]
 ```
 
 What it enables:
@@ -80,7 +80,7 @@ Notes:
 Install:
 
 ```bash
-pip install coryl[fsspec]
+python -m pip install coryl[fsspec]
 ```
 
 What it enables:
@@ -109,7 +109,7 @@ Notes:
 Install:
 
 ```bash
-pip install coryl[platform]
+python -m pip install coryl[platform]
 ```
 
 What it enables:
@@ -128,7 +128,7 @@ What `for_app(...)` does:
 Install:
 
 ```bash
-pip install coryl[pydantic]
+python -m pip install coryl[pydantic]
 ```
 
 What it enables:
@@ -153,7 +153,7 @@ Notes:
 Install:
 
 ```bash
-pip install coryl[watch]
+python -m pip install coryl[watch]
 ```
 
 What it enables:
@@ -174,7 +174,7 @@ Notes:
 Install:
 
 ```bash
-pip install coryl[yaml]
+python -m pip install coryl[yaml]
 ```
 
 What it enables:
@@ -195,7 +195,7 @@ Notes:
 Install:
 
 ```bash
-pip install coryl[cli]
+python -m pip install coryl[cli]
 ```
 
 Current behavior:
@@ -205,7 +205,7 @@ Current behavior:
 
 Practical takeaway:
 
-`pip install coryl` is enough to run the CLI unless your manifest or resources need
+`python -m pip install coryl` is enough to run the CLI unless your manifest or resources need
 other extras such as `diskcache` or `yaml`.
 
 If a CLI command touches a resource that depends on a missing extra, the same lazy
@@ -216,7 +216,7 @@ runtime error is raised with the matching install hint.
 Install:
 
 ```bash
-pip install coryl[all]
+python -m pip install coryl[all]
 ```
 
 What it includes:

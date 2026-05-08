@@ -48,6 +48,7 @@ class ReleaseReadinessTests(unittest.TestCase):
         optional = project["optional-dependencies"]
         setuptools_config = pyproject["tool"]["setuptools"]
 
+        self.assertEqual(project["version"], "0.0.2")
         self.assertEqual(project["requires-python"], ">=3.10")
         self.assertIn("Programming Language :: Python :: 3.10", project["classifiers"])
         self.assertIn("Programming Language :: Python :: 3.11", project["classifiers"])
@@ -82,10 +83,14 @@ class ReleaseReadinessTests(unittest.TestCase):
         changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
 
         self.assertIn("## 0.0.2 - 2026-05-08", changelog)
-        self.assertIn("coverage, mypy, and Ruff", changelog)
+        self.assertIn("packaging, documentation clarity, and reproducible QA", changelog)
+        self.assertIn("No Coryl runtime features or public APIs changed", changelog)
+        self.assertIn("### Breaking changes", changelog)
+        self.assertIn("### Migration notes", changelog)
+        self.assertIn("### Optional extras", changelog)
+        self.assertIn("### Known limitations", changelog)
         self.assertIn("MANIFEST.in", changelog)
         self.assertIn("YAML-backed fsspec tests", changelog)
-        self.assertIn("No Coryl runtime features or public APIs changed", changelog)
         self.assertIn("## 0.0.1 - 2026-05-08", changelog)
         self.assertIn("Core safety checks", changelog)
         self.assertIn("Atomic writes", changelog)
@@ -131,6 +136,8 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertIn("include README.md", manifest)
         self.assertIn("include LICENSE", manifest)
         self.assertIn("include CHANGELOG.md", manifest)
+        self.assertIn("include CONTRIBUTING.md", manifest)
+        self.assertIn("include AGENTS.md", manifest)
         self.assertIn("graft docs", manifest)
         self.assertIn("graft examples", manifest)
         self.assertIn("graft tests", manifest)

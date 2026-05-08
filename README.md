@@ -15,12 +15,18 @@ The hard part is usually not file I/O itself. The hard part is keeping paths pre
 
 Coryl keeps that layer small. The default path is intentionally simple: `Coryl(root=".")` plus a few focused namespaces such as `configs`, `caches`, and `assets`. When you need more, optional extras add typed config validation, layered config, file watching, `diskcache`, `fsspec`, platform-specific app directories, and file locks without turning the core package into a framework.
 
+## Release Status
+
+Coryl is a small beta library. The default local-filesystem flow, `Coryl(root=".")`,
+is the most exercised path today. Optional integrations are covered by targeted tests,
+but they remain intentionally conservative and some helpers are local-filesystem-only.
+
 ## Installation
 
 Core install:
 
 ```bash
-pip install coryl
+python -m pip install coryl
 ```
 
 The core install includes:
@@ -35,15 +41,15 @@ Optional extras:
 
 | Extra | Install | What it enables | Notes |
 | --- | --- | --- | --- |
-| `lock` | `pip install coryl[lock]` | `Resource.lock()` | Local filesystem only. |
-| `diskcache` | `pip install coryl[diskcache]` | `app.caches.diskcache(...)` and `backend="diskcache"` | Local filesystem only. |
-| `fsspec` | `pip install coryl[fsspec]` | `Coryl.with_fs(...)` and `filesystem="fsspec"` | Opt-in, conservative support. |
-| `platform` | `pip install coryl[platform]` | `Coryl.for_app(...)` | Uses `platformdirs` for config/cache/data/log roots. |
-| `pydantic` | `pip install coryl[pydantic]` | `load_typed()` and `save_typed()` | Expects a Pydantic v2-style interface. |
-| `watch` | `pip install coryl[watch]` | `watch()`, `watch_reload()`, `on_change()` | Local filesystem only and blocking. |
-| `yaml` | `pip install coryl[yaml]` | `read_yaml()`, `write_yaml()`, YAML manifests, and YAML layered-config files | Loaded lazily when you touch YAML files. |
-| `cli` | `pip install coryl[cli]` | No extra dependencies today | The CLI already ships with `pip install coryl`. |
-| `all` | `pip install coryl[all]` | Full optional feature set | Includes the declared extras, including YAML support. |
+| `lock` | `python -m pip install coryl[lock]` | `Resource.lock()` | Local filesystem only. |
+| `diskcache` | `python -m pip install coryl[diskcache]` | `app.caches.diskcache(...)` and `backend="diskcache"` | Local filesystem only. |
+| `fsspec` | `python -m pip install coryl[fsspec]` | `Coryl.with_fs(...)` and `filesystem="fsspec"` | Opt-in, conservative support. |
+| `platform` | `python -m pip install coryl[platform]` | `Coryl.for_app(...)` | Uses `platformdirs` for config/cache/data/log roots. |
+| `pydantic` | `python -m pip install coryl[pydantic]` | `load_typed()` and `save_typed()` | Expects a Pydantic v2-style interface. |
+| `watch` | `python -m pip install coryl[watch]` | `watch()`, `watch_reload()`, `on_change()` | Local filesystem only and blocking. |
+| `yaml` | `python -m pip install coryl[yaml]` | `read_yaml()`, `write_yaml()`, YAML manifests, and YAML layered-config files | Loaded lazily when you touch YAML files. |
+| `cli` | `python -m pip install coryl[cli]` | No extra dependencies today | The CLI already ships with `python -m pip install coryl`. |
+| `all` | `python -m pip install coryl[all]` | Full optional feature set | Includes the declared extras, including YAML support. |
 
 Missing optional dependencies fail lazily. Coryl imports them only when you use the
 related feature, then raises `CorylOptionalDependencyError` with the matching
@@ -51,10 +57,13 @@ related feature, then raises `CorylOptionalDependencyError` with the matching
 
 More detail:
 
-- [Optional extras](docs/optional-extras.md)
-- [Limitations](docs/limitations.md)
+- [Optional extras](https://github.com/D1TCRY/Coryl/blob/main/docs/optional-extras.md)
+- [Limitations](https://github.com/D1TCRY/Coryl/blob/main/docs/limitations.md)
 
 ## Quick Start
+
+Run this from a disposable working directory or a project folder you control. Coryl
+creates files relative to the root you pass in.
 
 ```python
 from coryl import Coryl
@@ -572,11 +581,11 @@ Current limitations:
 - the `diskcache` backend is local-only
 - local atomic replace semantics are not available; writes fall back to regular writes
 
-See [Limitations](docs/limitations.md) for the current boundary.
+See [Limitations](https://github.com/D1TCRY/Coryl/blob/main/docs/limitations.md) for the current boundary.
 
 ## API Overview
 
-The public surface is small enough to skim and broad enough that the full reference is still useful. See [API reference](docs/api-reference.md) for signatures and behavior details.
+The public surface is small enough to skim and broad enough that the full reference is still useful. See [API reference](https://github.com/D1TCRY/Coryl/blob/main/docs/api-reference.md) for signatures and behavior details.
 
 The main pieces are:
 
@@ -590,24 +599,24 @@ The main pieces are:
 
 ## Examples
 
-See [examples/](examples/) for runnable scripts validated by the test suite.
+See [examples/](https://github.com/D1TCRY/Coryl/tree/main/examples) for runnable scripts validated by the test suite, and see [examples/README.md](https://github.com/D1TCRY/Coryl/blob/main/examples/README.md) for dependency notes and expected output summaries.
 
 Optional examples such as `typed_config.py`, `cache_diskcache.py`, and
 `fsspec_memory.py` still run from a fresh checkout. When the extra is not installed,
 they print a small JSON payload with `available: false` and `skipped: true` instead of
 failing.
 
-- [examples/simple_local_app.py](examples/simple_local_app.py): `Coryl(root=...)` with TOML config, JSON config, cache, and asset lookup
-- [examples/cli_tool_config.py](examples/cli_tool_config.py): create a default config, update it, and print a value
-- [examples/api_cache.py](examples/api_cache.py): fake API caching with `remember_json(..., ttl=...)`
-- [examples/desktop_app_assets.py](examples/desktop_app_assets.py): filesystem assets with `require()`, `files()`, and `glob()`
-- [examples/manifest_startup.py](examples/manifest_startup.py): write `app.toml`, load it, use configs/caches/assets, and inspect `audit_paths()`
-- [examples/package_assets.py](examples/package_assets.py): package assets with `read_text()`, `read_bytes()`, and `copy_to()`
-- [examples/typed_config.py](examples/typed_config.py): typed config loading with Pydantic when available
-- [examples/layered_config.py](examples/layered_config.py): defaults, local overrides, environment overrides, and runtime overrides
-- [examples/cache_diskcache.py](examples/cache_diskcache.py): optional `diskcache` cache backend
-- [examples/fsspec_memory.py](examples/fsspec_memory.py): optional `fsspec` memory filesystem backend
-- [examples/diagnostics_cli.py](examples/diagnostics_cli.py): `resources list`, `resources check`, and `config show`
+- [examples/simple_local_app.py](https://github.com/D1TCRY/Coryl/blob/main/examples/simple_local_app.py): `Coryl(root=...)` with TOML config, JSON config, cache, and asset lookup
+- [examples/cli_tool_config.py](https://github.com/D1TCRY/Coryl/blob/main/examples/cli_tool_config.py): create a default config, update it, and print a value
+- [examples/api_cache.py](https://github.com/D1TCRY/Coryl/blob/main/examples/api_cache.py): fake API caching with `remember_json(..., ttl=...)`
+- [examples/desktop_app_assets.py](https://github.com/D1TCRY/Coryl/blob/main/examples/desktop_app_assets.py): filesystem assets with `require()`, `files()`, and `glob()`
+- [examples/manifest_startup.py](https://github.com/D1TCRY/Coryl/blob/main/examples/manifest_startup.py): write `app.toml`, load it, use configs/caches/assets, and inspect `audit_paths()`
+- [examples/package_assets.py](https://github.com/D1TCRY/Coryl/blob/main/examples/package_assets.py): package assets with `read_text()`, `read_bytes()`, and `copy_to()`
+- [examples/typed_config.py](https://github.com/D1TCRY/Coryl/blob/main/examples/typed_config.py): typed config loading with Pydantic when available
+- [examples/layered_config.py](https://github.com/D1TCRY/Coryl/blob/main/examples/layered_config.py): defaults, local overrides, environment overrides, and runtime overrides
+- [examples/cache_diskcache.py](https://github.com/D1TCRY/Coryl/blob/main/examples/cache_diskcache.py): optional `diskcache` cache backend
+- [examples/fsspec_memory.py](https://github.com/D1TCRY/Coryl/blob/main/examples/fsspec_memory.py): optional `fsspec` memory filesystem backend
+- [examples/diagnostics_cli.py](https://github.com/D1TCRY/Coryl/blob/main/examples/diagnostics_cli.py): `resources list`, `resources check`, and `config show`
 
 ## Compatibility Notes
 
@@ -625,4 +634,4 @@ failing.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/D1TCRY/Coryl/blob/main/LICENSE).
