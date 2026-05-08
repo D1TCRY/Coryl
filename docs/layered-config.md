@@ -42,8 +42,9 @@ Layers are applied in this order:
 
 1. the files listed in `files=[...]`
 2. `secrets=...`
-3. environment variables from `env_prefix=...`
-4. runtime overrides from `override(...)` and `apply_overrides(...)`
+3. `secrets_dir=...`
+4. environment variables from `env_prefix=...`
+5. runtime overrides from `override(...)` and `apply_overrides(...)`
 
 Later layers win.
 
