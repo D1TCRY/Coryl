@@ -67,6 +67,45 @@ Cache resources are managed directories for inspectable local cache files throug
 
 Asset resources are managed directories for safe file lookups through helpers such as `file(...)`, `directory(...)`, and `require(...)`.
 
+Bundled package assets are read through `importlib.resources`, so the same calls work from a source tree, a regular install, or a zipped import:
+
+```python
+import importlib
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from coryl import Coryl
+
+with TemporaryDirectory() as temp_dir:
+    root = Path(temp_dir)
+    package_name = "coryl_readme_pkg"
+    package_root = root / package_name
+    templates_root = package_root / "assets" / "templates"
+    templates_root.mkdir(parents=True, exist_ok=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (templates_root / "email.html").write_text(
+        "<html>Hello from Coryl</html>",
+        encoding="utf-8",
+    )
+
+    sys.path.insert(0, str(root))
+    importlib.invalidate_caches()
+    sys.modules.pop(package_name, None)
+    try:
+        app = Coryl(root=root)
+        assets = app.assets.from_package("templates", package_name, path="assets/templates")
+        print(assets.read_text("email.html"))
+        with assets.file("email.html").as_file() as path:
+            print(path.name)
+    finally:
+        sys.modules.pop(package_name, None)
+        importlib.invalidate_caches()
+        sys.path.remove(str(root))
+```
+
+`files(pattern=...)` also works for zipped packages because Coryl walks package resources through `importlib.resources`. The returned values are package resource handles, not stable paths, so use `read_text()`, `read_bytes()`, `file(...).as_file()`, or `copy_to()` when you need on-disk access.
+
 ### Manifests
 
 Manifests let you declare resources in JSON, TOML, or YAML and load them through one file. JSON and TOML work in the core install. YAML support requires `pip install coryl[yaml]`.

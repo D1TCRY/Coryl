@@ -2009,13 +2009,24 @@ class PackageAssetGroup:
         return matches
 
     def copy_to(self, target_directory: str | Path, *, overwrite: bool = False) -> Path:
-        destination_root = Path(target_directory).resolve(strict=False)
+        validated_target = validate_managed_path_input(
+            target_directory,
+            allow_absolute=True,
+        )
+        destination_root = Path(validated_target).resolve(strict=False)
         if destination_root.exists() and not destination_root.is_dir():
             raise NotADirectoryError(destination_root)
         destination_root.mkdir(parents=True, exist_ok=True)
 
         for relative_path, candidate in _iter_traversable_files(self.traversable, PurePosixPath(".")):
-            destination_path = destination_root.joinpath(*relative_path.parts)
+            safe_relative_path = validate_managed_path_input(Path(*relative_path.parts))
+            destination_path = destination_root.joinpath(*safe_relative_path.parts).resolve(
+                strict=False
+            )
+            if not is_within_root(destination_path, destination_root):
+                raise UnsafePathError(
+                    f"Package asset copy target '{destination_path}' escapes '{destination_root}'."
+                )
             if destination_path.exists() and not overwrite:
                 raise FileExistsError(destination_path)
             destination_path.parent.mkdir(parents=True, exist_ok=True)

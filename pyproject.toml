@@ -25,7 +25,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 keywords = ["resources", "files", "configuration", "assets", "python"]
-urls = { Homepage = "https://www.coryl.net" }
+urls = { Homepage = "https://www.ccometa.net/coryl" }
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
