@@ -30,6 +30,14 @@ Coryl gives you one place to declare these resources, keeps them inside a safe r
 pip install coryl
 ```
 
+Optional diagnostics CLI support:
+
+```bash
+pip install coryl[cli]
+```
+
+The diagnostics CLI is optional tooling for Coryl-managed projects. It is not required for normal library usage.
+
 Optional file locking support:
 
 ```bash
@@ -756,6 +764,32 @@ paths:
     cache: .cache/http
     ui: assets/ui
 ```
+
+## Diagnostics CLI
+
+The diagnostics CLI is an optional helper for projects that already use a Coryl manifest. It is not required to use the library from Python code.
+
+The current CLI uses the standard library `argparse` module, so `pip install coryl` already includes it. `pip install coryl[cli]` is also supported if you prefer to keep optional tooling explicit in your project setup.
+
+Examples:
+
+```bash
+coryl resources list --manifest app.toml --root .
+coryl resources check --manifest app.toml --root .
+coryl config show settings --manifest app.toml --root .
+coryl cache clear http_cache --manifest app.toml --root .
+coryl assets list ui --manifest app.toml --root .
+```
+
+Available commands:
+
+- `coryl resources list` shows the resources loaded from the manifest, including role, kind, existence, and resolved path.
+- `coryl resources check` reports missing or unsafe resources and exits with a non-zero status when problems are found.
+- `coryl config show NAME` loads a managed config resource and prints its contents.
+- `coryl cache clear NAME` clears a managed cache resource through Coryl's own cache API.
+- `coryl assets list NAME` lists files inside a managed asset group.
+
+By default the CLI prints a simple human-readable table. Add `--json` to any command for machine-readable output.
 
 ## Safety Model
 
