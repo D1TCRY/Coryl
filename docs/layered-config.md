@@ -4,6 +4,8 @@
 
 It is meant for applications that want a few ordered config files, optional secrets, environment overrides, and runtime overrides without adding a larger config framework.
 
+Layered config currently requires the default local filesystem and is not available on fsspec-backed managers.
+
 ## Basic Usage
 
 ```python

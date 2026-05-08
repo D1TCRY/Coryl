@@ -61,7 +61,7 @@ Config resources are structured files with `load()`, `save()`, `get()`, and `upd
 
 ### Caches
 
-Cache resources are managed directories for inspectable local cache files through helpers such as `remember_json(...)`, `remember_text(...)`, `get(...)`, and `set(...)`.
+Cache resources are managed directories for inspectable cache files through helpers such as `remember_json(...)`, `remember_text(...)`, `get(...)`, and `set(...)`.
 
 ### Assets
 
@@ -129,7 +129,7 @@ pip install coryl
 - `coryl[pydantic]` for typed config loading and saving.
 - `coryl[diskcache]` for the `diskcache` cache backend.
 - `coryl[watch]` for blocking watch and reload helpers.
-- `coryl[fsspec]` for advanced local or remote filesystem backends.
+- `coryl[fsspec]` for conservative fsspec-backed local or remote filesystem roots.
 - `coryl[lock]` for inter-process file locks.
 - `coryl[cli]` for diagnostics commands.
 
@@ -159,6 +159,11 @@ Deeper docs:
 
 ## Compatibility Notes
 
+- The default `Coryl(root=...)` path handling stays local and pathlib-backed. fsspec support is only enabled when you opt into `Coryl.with_fs(...)` or `Coryl(..., filesystem="fsspec")`.
+- fsspec support is intentionally conservative: basic file and directory registration, text and bytes I/O, structured JSON and TOML helpers, optional YAML helpers, directory globbing, and the built-in file-backed cache helpers work on supported backends such as `memory://`.
+- Atomic replace guarantees remain local-only. fsspec-backed resources fall back to regular writes when `atomic=True`.
+- `open()`, `lock()`, and `watch()` remain local-only helpers.
+- The `diskcache` backend and layered config workflows remain local-only.
 - Legacy `FileManager`-style helpers are still available for older code.
 - `load_config()` reloads the manifest, not an application settings resource.
 - `app.config` is reserved for loaded manifest content.

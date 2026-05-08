@@ -776,6 +776,10 @@ class ResourceManager:
             backend=backend,
         )
         if backend == "diskcache":
+            if self._filesystem.kind != "local":
+                raise CorylValidationError(
+                    "The diskcache backend is only supported on the default local filesystem."
+                )
             _load_diskcache_cache_class()
         self.register(
             name,
