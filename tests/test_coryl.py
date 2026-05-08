@@ -90,6 +90,22 @@ class CorylTests(unittest.TestCase):
             with self.subTest(resource=name):
                 self.assertTrue(resource.path.is_relative_to(manager.root_path))
 
+    def test_resource_spec_factory_helpers_preserve_roles_and_kinds(self) -> None:
+        data_file = ResourceSpec.data("runtime/state.json")
+        data_directory = ResourceSpec.data("runtime/state")
+        log_file = ResourceSpec.logs("runtime/app.log")
+        log_directory = ResourceSpec.logs("runtime/logs")
+
+        self.assertEqual(ResourceSpec.config("config/settings.toml").role, "config")
+        self.assertEqual(ResourceSpec.cache(".cache/http").kind, "directory")
+        self.assertEqual(ResourceSpec.assets("assets/ui").role, "assets")
+        self.assertEqual(data_file.kind, "file")
+        self.assertEqual(data_file.role, "data")
+        self.assertEqual(data_directory.kind, "directory")
+        self.assertEqual(log_file.kind, "file")
+        self.assertEqual(log_file.role, "logs")
+        self.assertEqual(log_directory.kind, "directory")
+
     def test_single_root_mode_exposes_data_and_logs_namespaces(self) -> None:
         manager = Coryl(self.root)
 
@@ -975,6 +991,50 @@ ports = [5432, 5433]
         with self.assertRaises(CorylValidationError):
             settings.require("database.user")
 
+    def test_layered_config_writes_to_the_last_file_layer(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        defaults_path = config_dir / "defaults.json"
+        local_path = config_dir / "local.json"
+        defaults_document = {
+            "theme": "light",
+            "database": {"host": "defaults-host", "port": 5432},
+        }
+        local_document = {"database": {"host": "local-host"}}
+        defaults_path.write_text(json.dumps(defaults_document), encoding="utf-8")
+        local_path.write_text(json.dumps(local_document), encoding="utf-8")
+
+        manager = Coryl(self.root)
+        settings = manager.configs.layered(
+            "settings",
+            files=["config/defaults.json", "config/local.json"],
+        )
+
+        settings.save({"theme": "dark", "database": {"host": "saved-host", "port": 6432}})
+        settings.update(debug=True)
+
+        self.assertEqual(settings.path, local_path.resolve())
+        self.assertEqual(
+            json.loads(defaults_path.read_text(encoding="utf-8")),
+            defaults_document,
+        )
+        self.assertEqual(
+            json.loads(local_path.read_text(encoding="utf-8")),
+            {
+                "theme": "dark",
+                "database": {"host": "saved-host", "port": 6432},
+                "debug": True,
+            },
+        )
+        self.assertEqual(
+            settings.load(),
+            {
+                "theme": "dark",
+                "database": {"host": "saved-host", "port": 6432},
+                "debug": True,
+            },
+        )
+
     def test_readonly_config_cannot_save_or_update(self) -> None:
         settings_path = self.root / "config" / "settings.yaml"
         settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1205,6 +1265,29 @@ resources:
         self.assertEqual(manager.settings_file_path.name, "new-settings.yaml")
         with self.assertRaises(AttributeError):
             _ = manager.assets_directory_path
+
+    def test_manifest_config_property_remains_reserved_for_loaded_manifest_data(self) -> None:
+        manifest_path = self.root / "app.toml"
+        manifest_path.write_text(
+            """
+version = 2
+
+[resources.settings]
+path = "config/settings.toml"
+kind = "file"
+role = "config"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        manager = Coryl(self.root, manifest_path="app.toml")
+        manager.register_config("config", "config/runtime.toml")
+
+        self.assertIsInstance(manager.config, dict)
+        self.assertEqual(manager.config["version"], 2)
+        self.assertIn("resources", manager.config)
+        self.assertIsInstance(manager.configs.get("config"), ConfigResource)
+        self.assertEqual(manager.config_file_path, manifest_path.resolve())
 
     def test_manifest_rejects_unsupported_version(self) -> None:
         manifest_path = self.root / "app.yaml"
@@ -1654,6 +1737,26 @@ resources:
         self.assertEqual(assets.require("images", "logo.svg").path.name, "logo.svg")
         self.assertTrue(assets.require("icons", kind="directory").path.is_dir())
         self.assertEqual(len(assets.files("**/*.svg")), 2)
+
+    def test_readonly_asset_groups_cannot_create_or_mutate_children(self) -> None:
+        asset_root = self.root / "assets" / "ui" / "images"
+        asset_root.mkdir(parents=True, exist_ok=True)
+        (asset_root / "logo.svg").write_text("<svg></svg>", encoding="utf-8")
+
+        manager = Coryl(self.root)
+        assets = manager.register_assets("ui", "assets/ui", readonly=True)
+        logo = assets.file("images", "logo.svg")
+
+        self.assertTrue(logo.readonly)
+
+        with self.assertRaises(CorylReadOnlyResourceError):
+            logo.write_text("<svg>updated</svg>")
+
+        with self.assertRaises(CorylReadOnlyResourceError):
+            assets.file("images", "new.svg", create=True)
+
+        with self.assertRaises(CorylReadOnlyResourceError):
+            assets.directory("icons", create=True)
 
     def test_package_assets_can_read_text_and_bytes(self) -> None:
         with self._test_asset_package() as package_name:
