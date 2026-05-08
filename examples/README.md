@@ -14,6 +14,14 @@ Run the whole example suite:
 pytest -q tests/test_examples.py
 ```
 
+Fresh-checkout behavior:
+
+- Each example adds `src/` to `sys.path`, so the scripts run directly from a source
+  checkout without installing the package first.
+- Optional examples such as `typed_config.py`, `cache_diskcache.py`, and
+  `fsspec_memory.py` return a JSON payload with `available: false` and
+  `skipped: true` when the extra is missing.
+
 Included scripts:
 
 - `simple_local_app.py`: `Coryl(root=...)` with TOML config, JSON config, cache, and asset lookup

@@ -41,14 +41,13 @@ Optional extras:
 | `platform` | `pip install coryl[platform]` | `Coryl.for_app(...)` | Uses `platformdirs` for config/cache/data/log roots. |
 | `pydantic` | `pip install coryl[pydantic]` | `load_typed()` and `save_typed()` | Expects a Pydantic v2-style interface. |
 | `watch` | `pip install coryl[watch]` | `watch()`, `watch_reload()`, `on_change()` | Local filesystem only and blocking. |
+| `yaml` | `pip install coryl[yaml]` | `read_yaml()`, `write_yaml()`, YAML manifests, and YAML layered-config files | Loaded lazily when you touch YAML files. |
 | `cli` | `pip install coryl[cli]` | No extra dependencies today | The CLI already ships with `pip install coryl`. |
 | `all` | `pip install coryl[all]` | Full optional feature set | Includes the declared extras, including YAML support. |
 
-YAML support is a separate optional extra:
-
-```bash
-pip install coryl[yaml]
-```
+Missing optional dependencies fail lazily. Coryl imports them only when you use the
+related feature, then raises `CorylOptionalDependencyError` with the matching
+`pip install coryl[...]` hint.
 
 More detail:
 
@@ -592,6 +591,11 @@ The main pieces are:
 ## Examples
 
 See [examples/](examples/) for runnable scripts validated by the test suite.
+
+Optional examples such as `typed_config.py`, `cache_diskcache.py`, and
+`fsspec_memory.py` still run from a fresh checkout. When the extra is not installed,
+they print a small JSON payload with `available: false` and `skipped: true` instead of
+failing.
 
 - [examples/simple_local_app.py](examples/simple_local_app.py): `Coryl(root=...)` with TOML config, JSON config, cache, and asset lookup
 - [examples/cli_tool_config.py](examples/cli_tool_config.py): create a default config, update it, and print a value

@@ -30,6 +30,10 @@ What is not included:
 - `filelock`
 - `PyYAML`
 
+Optional dependencies are loaded lazily. Coryl imports them only when you use the
+related feature, then raises `CorylOptionalDependencyError` with the matching
+`pip install coryl[...]` hint.
+
 ## `lock`
 
 Install:
@@ -46,6 +50,8 @@ Notes:
 
 - Locking is local-filesystem-only.
 - Coryl creates sibling lock files named like `<resource>.lock`.
+- If missing, entering `Resource.lock(...)` raises `CorylOptionalDependencyError` with
+  `pip install coryl[lock]`.
 
 ## `diskcache`
 
@@ -66,6 +72,8 @@ Notes:
 - This backend is local-filesystem-only.
 - Values are stored in `diskcache`, not in Coryl's inspectable file-backed cache
   layout.
+- If missing, registering or using the backend raises `CorylOptionalDependencyError`
+  with `pip install coryl[diskcache]`.
 
 ## `fsspec`
 
@@ -93,6 +101,8 @@ Notes:
 - The implementation is intentionally conservative.
 - `open()`, `lock()`, `watch()`, layered config, and the diskcache backend do not work
   on fsspec managers.
+- If missing, `Coryl.with_fs(...)` and `Coryl(..., filesystem="fsspec", ...)` raise
+  `CorylOptionalDependencyError` with `pip install coryl[fsspec]`.
 
 ## `platform`
 
@@ -110,6 +120,8 @@ What `for_app(...)` does:
 
 - Uses `platformdirs` to choose config, cache, data, and log roots
 - Keeps assets under the data root
+- If missing, `Coryl.for_app(...)` raises `CorylOptionalDependencyError` with
+  `pip install coryl[platform]`.
 
 ## `pydantic`
 
@@ -131,6 +143,10 @@ Notes:
   `model_dump(mode="json")`.
 - The extra installs both `pydantic` and `pydantic-settings`, but Coryl's current
   public API uses the Pydantic validation and dump interface directly.
+- If missing, `load_typed()` and `save_typed()` raise `CorylOptionalDependencyError`
+  with `pip install coryl[pydantic]`.
+- If Pydantic v1 is installed, Coryl still raises `CorylOptionalDependencyError`
+  because typed helpers require the v2 API.
 
 ## `watch`
 
@@ -150,6 +166,29 @@ Notes:
 
 - Watching is local-filesystem-only.
 - The helpers are blocking iterators and callbacks, not a background service.
+- If missing, `watch()`, `watch_reload()`, and `on_change()` raise
+  `CorylOptionalDependencyError` with `pip install coryl[watch]`.
+
+## `yaml`
+
+Install:
+
+```bash
+pip install coryl[yaml]
+```
+
+What it enables:
+
+- `read_yaml()` and `write_yaml()`
+- YAML manifest loading
+- YAML layered-config files
+
+Notes:
+
+- JSON and TOML stay in the core install; YAML is the only structured format that
+  needs an extra.
+- If missing, YAML reads, writes, and manifest loading raise
+  `CorylOptionalDependencyError` with `pip install coryl[yaml]`.
 
 ## `cli`
 
@@ -168,6 +207,9 @@ Practical takeaway:
 
 `pip install coryl` is enough to run the CLI unless your manifest or resources need
 other extras such as `diskcache` or `yaml`.
+
+If a CLI command touches a resource that depends on a missing extra, the same lazy
+runtime error is raised with the matching install hint.
 
 ## `all`
 
